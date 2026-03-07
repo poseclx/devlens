@@ -1,3 +1,3 @@
-"""DevLens — AI-powered PR review assistant."""
+"""DevLens — A PR review assistant."""
 
 __version__ = "0.1.0"
