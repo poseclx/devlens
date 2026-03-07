@@ -2,7 +2,7 @@
 
 # DevLens
 
-**AI-powered PR review assistant that cuts through the noise and tells you what actually matters.**
+**A PR review assistant that cuts through the noise and tells you what actually matters.**
 
 [![PyPI version](https://img.shields.io/pypi/v/devlens?color=blue&label=PyPI)](https://pypi.org/project/devlens/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
@@ -19,7 +19,7 @@ DevLens analyzes GitHub Pull Requests and gives you a concise, risk-aware summar
 
 ## Why DevLens?
 
-Code reviews are critical but time-consuming. DevLens uses AI to surface what actually matters in a PR:
+Code reviews are critical but time-consuming. DevLens surfaces what actually matters in a PR:
 
 - **Risk Detection** — Flags security concerns, breaking changes, and logic-heavy areas
 - **Smart Summarization** — Skips trivial changes (formatting, imports), highlights what matters
@@ -30,7 +30,7 @@ Code reviews are critical but time-consuming. DevLens uses AI to surface what ac
 ## Installation
 
 ```bash
-pip install devlens
+pip install git+https://github.com/poseclx/devlens.git
 ```
 
 Or install from source:
@@ -40,6 +40,8 @@ git clone https://github.com/poseclx/devlens.git
 cd devlens
 pip install -e .
 ```
+
+> **Note:** PyPI release coming soon — `pip install devlens` will be available after the first release.
 
 ## Usage
 
