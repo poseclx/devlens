@@ -40,8 +40,7 @@ Return a JSON object with this structure:
     }
   ],
   "recommendations": ["actionable recommendation 1", "actionable recommendation 2"]
-}
-"""
+}"""
 
 
 @dataclass
@@ -115,9 +114,8 @@ class DocsHealthResult:
         if self.issues:
             lines += ["## Issues", ""]
             for issue in self.issues:
-                emoji = {"error": "🔴", "warning": "🟡", "info": "🔵"}.get(issue.severity, "⚪")
                 lines += [
-                    f"### {emoji} {issue.title} (Block #{issue.block_index})",
+                    f"### {issue.title} (Block #{issue.block_index})",
                     f"",
                     f"**Severity:** {issue.severity}",
                     f"",
@@ -181,7 +179,6 @@ def _static_check(blocks: list[CodeBlock], content: str) -> DocsHealthResult:
     total = len(blocks)
 
     for b in blocks:
-        # Flag blocks with no language tag
         if b.language == "text" and b.code:
             issues.append(DocsIssue(
                 block_index=b.index,
@@ -192,7 +189,6 @@ def _static_check(blocks: list[CodeBlock], content: str) -> DocsHealthResult:
                 suggestion="Add a language tag, e.g. ```python or ```bash",
                 code=b.code,
             ))
-        # Flag very short (likely incomplete) code blocks
         if len(b.code.strip().splitlines()) == 1 and b.language in ("python", "py", "bash", "sh"):
             issues.append(DocsIssue(
                 block_index=b.index,
@@ -300,7 +296,6 @@ def _gemini(model: str, prompt: str, key: str | None) -> str:
 def _ai_check(blocks: list[CodeBlock], content: str, file_path: str, model: str, api_key: str | None) -> DocsHealthResult:
     """AI-powered docs check — supports OpenAI, Anthropic, and Google Gemini."""
     import os
-    # Allow caller to override the key via argument
     if api_key:
         if model.startswith("claude"):
             os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
