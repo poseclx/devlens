@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 import sys
+import os
 import json
+import subprocess
+import platform
 from pathlib import Path
 
 import click
@@ -27,6 +30,8 @@ PROVIDERS = {
         "default": "gpt-4o",
         "env": "OPENAI_API_KEY",
         "install": "openai",
+        "key_prefix": "sk-",
+        "key_hint": "Starts with sk-...",
     },
     "anthropic": {
         "label": "Anthropic (Claude)",
@@ -39,6 +44,8 @@ PROVIDERS = {
         "default": "claude-3-5-sonnet-20241022",
         "env": "ANTHROPIC_API_KEY",
         "install": "anthropic",
+        "key_prefix": "sk-ant-",
+        "key_hint": "Starts with sk-ant-...",
     },
     "gemini": {
         "label": "Google Gemini",
@@ -46,6 +53,8 @@ PROVIDERS = {
         "default": "gemini-1.5-pro",
         "env": "GEMINI_API_KEY",
         "install": "google-generativeai",
+        "key_prefix": "AI",
+        "key_hint": "Get from https://aistudio.google.com/apikey",
     },
 }
 
@@ -68,17 +77,44 @@ def _resolve_model(model_flag: str | None, cfg: dict) -> tuple[str, str]:
     provider = cfg.get("provider") or saved.get("provider")
 
     if model and provider:
+        # Check if API key is available
+        pinfo = PROVIDERS.get(provider, {})
+        env_var = pinfo.get("env", "")
+        api_key = saved.get("api_key") or os.environ.get(env_var, "")
+        if not api_key:
+            console.print()
+            console.print(Panel(
+                f"[bold yellow]API key missing for {pinfo.get('label', provider)}.[/]\n\n"
+                "Run [bold cyan]devlens init[/] to configure your API key.",
+                title="[bold]API Key Required[/]",
+                border_style="yellow",
+            ))
+            sys.exit(1)
+        # Set env var from saved config if not already set
+        if not os.environ.get(env_var) and saved.get("api_key"):
+            os.environ[env_var] = saved["api_key"]
         return model, provider
 
-    # Nothing configured — prompt
+    # Nothing configured — run init automatically
     console.print()
     console.print(Panel(
-        "[bold yellow]No AI provider configured.[/]\n\n"
-        "Run [bold cyan]devlens init[/] to set up once, "
-        "or pass [bold cyan]--model[/] to specify a model inline.",
-        title="[bold]Setup required[/]",
-        border_style="yellow",
+        "[bold yellow]DevLens is not configured yet.[/]\n\n"
+        "Starting first-time setup...",
+        title="[bold]Welcome to DevLens![/]",
+        border_style="cyan",
     ))
+    console.print()
+    _run_init_flow()
+    # Reload after init
+    saved = _load_setup()
+    model = saved.get("model")
+    provider = saved.get("provider")
+    if model and provider:
+        pinfo = PROVIDERS.get(provider, {})
+        env_var = pinfo.get("env", "")
+        if not os.environ.get(env_var) and saved.get("api_key"):
+            os.environ[env_var] = saved["api_key"]
+        return model, provider
     sys.exit(1)
 
 
@@ -106,6 +142,165 @@ def _save_setup(data: dict) -> None:
     _CONFIG_PATH.write_text(json.dumps(data, indent=2))
 
 
+def _install_package(package: str) -> bool:
+    """Install a Python package, returns True on success."""
+    console.print(f"\n[bold cyan]Installing {package}...[/]")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", package, "--quiet"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        console.print(f"[green]OK[/] {package} installed.")
+        return True
+    except subprocess.CalledProcessError:
+        console.print(f"[red]Failed to install {package}.[/] Run manually: pip install {package}")
+        return False
+
+
+def _fix_windows_path() -> bool:
+    """Add Python Scripts dir to user PATH on Windows. Returns True if changed."""
+    if platform.system() != "Windows":
+        return False
+
+    scripts_dir = Path(sys.executable).parent / "Scripts"
+    if not scripts_dir.exists():
+        # Microsoft Store Python layout
+        scripts_dir = Path(sys.executable).parent.parent / "Scripts"
+    if not scripts_dir.exists():
+        # Try site packages scripts
+        import site
+        user_scripts = Path(site.getusersitepackages()).parent / "Scripts"
+        if user_scripts.exists():
+            scripts_dir = user_scripts
+
+    scripts_str = str(scripts_dir)
+    current_path = os.environ.get("PATH", "")
+
+    if scripts_str.lower() in current_path.lower():
+        return False  # Already in PATH
+
+    console.print(f"\n[yellow]Adding to PATH:[/] {scripts_str}")
+    try:
+        # Use setx to persist for user
+        subprocess.check_call(
+            ["setx", "PATH", f"{scripts_str};%PATH%"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Also update current session
+        os.environ["PATH"] = f"{scripts_str};{current_path}"
+        console.print("[green]OK[/] PATH updated. New terminals will have 'devlens' available.")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        console.print(
+            f"[yellow]Could not auto-update PATH.[/]\n"
+            f"Add this directory to your PATH manually:\n"
+            f"  [bold]{scripts_str}[/]"
+        )
+        return False
+
+
+def _run_init_flow() -> None:
+    """Interactive setup flow — called by `devlens init` or auto on first use."""
+    console.print(Panel(
+        "[bold cyan]DevLens Setup[/]\n\n"
+        "Let's configure your AI provider. This takes 30 seconds.\n"
+        "You can change this any time by running [bold]devlens init[/] again.",
+        border_style="cyan",
+    ))
+    console.print()
+
+    # --- 1. Provider choice ---
+    provider_choices = list(PROVIDERS.keys())
+    for i, (key, info) in enumerate(PROVIDERS.items(), 1):
+        console.print(f"  [bold cyan]{i}.[/] {info['label']}")
+    console.print()
+
+    raw = click.prompt(
+        "Select provider (1/2/3)",
+        type=click.Choice(["1", "2", "3"]),
+        show_choices=False,
+    )
+    provider = provider_choices[int(raw) - 1]
+    pinfo = PROVIDERS[provider]
+
+    # --- 2. Model choice ---
+    console.print()
+    console.print(f"[bold]Models for {pinfo['label']}:[/]")
+    for i, m in enumerate(pinfo["models"], 1):
+        default_tag = " [dim](default)[/]" if m == pinfo["default"] else ""
+        console.print(f"  [bold cyan]{i}.[/] {m}{default_tag}")
+    console.print()
+
+    model_raw = click.prompt(
+        "Select model (Enter for default)",
+        default="1",
+        type=click.Choice([str(i) for i in range(1, len(pinfo["models"]) + 1)]),
+        show_choices=False,
+    )
+    model = pinfo["models"][int(model_raw) - 1]
+
+    # --- 3. API Key ---
+    env_var = pinfo["env"]
+    existing_key = os.environ.get(env_var, "")
+
+    console.print()
+    if existing_key:
+        masked = existing_key[:8] + "..." + existing_key[-4:]
+        console.print(f"[green]Found existing key:[/] {masked}")
+        use_existing = click.confirm("Use this key?", default=True)
+        if use_existing:
+            api_key = existing_key
+        else:
+            api_key = click.prompt(
+                f"Enter your {pinfo['label']} API key",
+                hide_input=True,
+            ).strip()
+    else:
+        console.print(f"[bold]Enter your {pinfo['label']} API key[/]")
+        console.print(f"[dim]{pinfo['key_hint']}[/]")
+        api_key = click.prompt(
+            "API key",
+            hide_input=True,
+        ).strip()
+
+    if not api_key:
+        console.print("[red]No API key provided. Setup cancelled.[/]")
+        return
+
+    # Set for current session
+    os.environ[env_var] = api_key
+
+    # --- 4. Install AI package ---
+    _install_package(pinfo["install"])
+
+    # --- 5. Fix PATH on Windows ---
+    if platform.system() == "Windows":
+        _fix_windows_path()
+
+    # --- 6. Save config ---
+    _save_setup({
+        "provider": provider,
+        "model": model,
+        "api_key": api_key,
+    })
+
+    console.print()
+    console.print(Panel(
+        f"[bold green]Setup complete![/]\n\n"
+        f"  Provider : [cyan]{pinfo['label']}[/]\n"
+        f"  Model    : [cyan]{model}[/]\n"
+        f"  API Key  : [dim]{api_key[:8]}...{api_key[-4:]}[/]\n"
+        f"  Config   : [dim]{_CONFIG_PATH}[/]\n\n"
+        f"You're ready to go! Try:\n"
+        f"  [bold]devlens review 42 --repo owner/repo --ai[/]\n"
+        f"  [bold]devlens onboard . --ai[/]",
+        border_style="green",
+    ))
+    console.print()
+
+
 # ── main group ────────────────────────────────────────────────
 
 @click.group()
@@ -114,10 +309,11 @@ def main() -> None:
     """DevLens — AI-powered developer assistant.
 
     Commands:\n
-      init     Choose your AI provider (run once)\n
+      init     Set up your AI provider (run once)\n
       review   Analyze a GitHub Pull Request\n
       onboard  Generate an onboarding guide for a repository\n
       docs     Check documentation health\n
+      doctor   Diagnose and fix common setup issues\n
     """
 
 
@@ -125,78 +321,113 @@ def main() -> None:
 
 @main.command()
 def init() -> None:
-    """Interactive setup: choose your AI provider and default model.
+    """Interactive setup: choose AI provider, model, and enter API key.
 
-    Saves your preference to ~/.devlens/config.json so you never
-    have to pass --model again.
+    Saves everything to ~/.devlens/config.json so you never
+    have to pass --model or set env vars again.
 
     Examples:\n
       devlens init\n
     """
     console.print()
-    console.print(Panel(
-        "[bold cyan]DevLens AI Setup[/]\n\n"
-        "Choose which AI provider you want to use.\n"
-        "You can change this any time by running [bold]devlens init[/] again.",
-        border_style="cyan",
-    ))
+    _run_init_flow()
+
+
+# ── devlens doctor ────────────────────────────────────────────
+
+@main.command()
+def doctor() -> None:
+    """Diagnose and fix common setup issues.
+
+    Checks:\n
+      - Python and pip availability\n
+      - PATH configuration (auto-fixes on Windows)\n
+      - AI provider configuration\n
+      - API key validity\n
+
+    Examples:\n
+      devlens doctor\n
+    """
+    console.print()
+    console.print(Panel("[bold cyan]DevLens Doctor[/]", border_style="cyan"))
     console.print()
 
-    # --- Provider choice ---
-    provider_choices = list(PROVIDERS.keys())
-    for i, (key, info) in enumerate(PROVIDERS.items(), 1):
-        console.print(f"  [bold cyan]{i}.[/] {info['label']}  ([dim]{info['env']}[/])")
+    all_ok = True
+
+    # 1. Python
+    console.print(f"[bold]Python:[/] {sys.version.split()[0]} at {sys.executable}")
+    console.print("[green]  OK[/]")
     console.print()
 
-    raw = click.prompt(
-        "Select provider",
-        type=click.Choice(["1", "2", "3"]),
-        show_choices=False,
-    )
-    provider = provider_choices[int(raw) - 1]
-    pinfo = PROVIDERS[provider]
-
-    console.print()
-    console.print(f"[bold]Available models for {pinfo['label']}:[/]")
-    for i, m in enumerate(pinfo["models"], 1):
-        default_tag = " [dim](default)[/]" if m == pinfo["default"] else ""
-        console.print(f"  [bold cyan]{i}.[/] {m}{default_tag}")
-    console.print()
-
-    model_raw = click.prompt(
-        "Select model (or press Enter for default)",
-        default="1",
-        type=click.Choice([str(i) for i in range(1, len(pinfo["models"]) + 1)]),
-        show_choices=False,
-    )
-    model = pinfo["models"][int(model_raw) - 1]
-
-    # --- Confirm env var ---
-    env_var = pinfo["env"]
-    import os
-    has_key = bool(os.environ.get(env_var))
-    console.print()
-    if has_key:
-        console.print(f"[green]✓[/] [dim]{env_var}[/] is already set in your environment.")
+    # 2. PATH check
+    console.print("[bold]PATH check:[/]")
+    import shutil
+    devlens_path = shutil.which("devlens")
+    if devlens_path:
+        console.print(f"[green]  OK[/] devlens found at {devlens_path}")
     else:
-        console.print(
-            f"[yellow]![/] [dim]{env_var}[/] is not set.\n"
-            f"  Add it to your shell profile:\n\n"
-            f"  [bold]export {env_var}=your-key-here[/]\n"
-        )
+        console.print("[yellow]  WARNING[/] 'devlens' not found in PATH")
+        if platform.system() == "Windows":
+            console.print("  Attempting auto-fix...")
+            _fix_windows_path()
+        else:
+            console.print("  Add the pip scripts directory to your PATH.")
+        all_ok = False
+    console.print()
 
-    # --- Save ---
-    _save_setup({"provider": provider, "model": model})
+    # 3. Config
+    console.print("[bold]Configuration:[/]")
+    saved = _load_setup()
+    if saved.get("provider") and saved.get("model"):
+        pinfo = PROVIDERS.get(saved["provider"], {})
+        console.print(f"[green]  OK[/] Provider: {pinfo.get('label', saved['provider'])}")
+        console.print(f"[green]  OK[/] Model: {saved['model']}")
+    else:
+        console.print("[yellow]  WARNING[/] Not configured. Run: devlens init")
+        all_ok = False
+    console.print()
 
-    console.print(Panel(
-        f"[bold green]Setup saved![/]\n\n"
-        f"Provider : [cyan]{pinfo['label']}[/]\n"
-        f"Model    : [cyan]{model}[/]\n"
-        f"Config   : [dim]{_CONFIG_PATH}[/]\n\n"
-        f"Install the required package if you haven't:\n"
-        f"  [bold]pip install {pinfo['install']}[/]",
-        border_style="green",
-    ))
+    # 4. API Key
+    console.print("[bold]API Key:[/]")
+    if saved.get("api_key"):
+        key = saved["api_key"]
+        console.print(f"[green]  OK[/] Key saved: {key[:8]}...{key[-4:]}")
+    elif saved.get("provider"):
+        env_var = PROVIDERS.get(saved["provider"], {}).get("env", "")
+        if os.environ.get(env_var):
+            console.print(f"[green]  OK[/] Found in environment: {env_var}")
+        else:
+            console.print(f"[yellow]  WARNING[/] No API key found. Run: devlens init")
+            all_ok = False
+    else:
+        console.print("[yellow]  WARNING[/] No provider configured.")
+        all_ok = False
+    console.print()
+
+    # 5. AI package
+    console.print("[bold]AI Package:[/]")
+    if saved.get("provider"):
+        pkg = PROVIDERS.get(saved["provider"], {}).get("install", "")
+        try:
+            __import__(pkg.replace("-", "_").split(">=")[0])
+            console.print(f"[green]  OK[/] {pkg} is installed")
+        except ImportError:
+            console.print(f"[yellow]  WARNING[/] {pkg} not installed. Installing...")
+            _install_package(pkg)
+            all_ok = False
+    else:
+        console.print("[dim]  Skipped (no provider configured)[/]")
+    console.print()
+
+    if all_ok:
+        console.print(Panel("[bold green]All checks passed![/]", border_style="green"))
+    else:
+        console.print(Panel(
+            "[bold yellow]Some issues found.[/]\n"
+            "Run [bold]devlens init[/] to fix configuration issues.\n"
+            "Restart your terminal after PATH changes.",
+            border_style="yellow",
+        ))
     console.print()
 
 
@@ -479,7 +710,7 @@ def _print_docs_rich(result, console: Console) -> None:
     if result.recommendations:
         console.print("[bold]Recommendations[/]")
         for rec in result.recommendations:
-            console.print(f"  • {rec}")
+            console.print(f"  * {rec}")
     console.print()
 
 
@@ -497,7 +728,7 @@ def _print_onboarding_rich(result, console: Console) -> None:
     if result.entry_points:
         console.print("[bold]Entry Points:[/]")
         for ep in result.entry_points:
-            console.print(f"  • [green]{ep}[/]")
+            console.print(f"  * [green]{ep}[/]")
         console.print()
 
     if result.key_files:
@@ -520,12 +751,11 @@ def _print_onboarding_rich(result, console: Console) -> None:
 
 
 def _detect_repo() -> str | None:
-    import subprocess
     try:
         remote = subprocess.check_output(["git", "remote", "get-url", "origin"], text=True).strip()
         if "github.com" in remote:
             return remote.split("github.com")[-1].lstrip(":/").removesuffix(".git")
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     return None
 
