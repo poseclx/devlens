@@ -20,7 +20,7 @@ class PRData:
     additions: int
     deletions: int
     changed_files: int
-    files: list[dict] = field(default_factory=list)   # [{filename, status, patch, additions, deletions}]
+    files: list[dict] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
     linked_issues: list[str] = field(default_factory=list)
 
