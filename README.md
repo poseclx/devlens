@@ -20,7 +20,7 @@ pip install devlens
 Or install from source:
 
 ```bash
-git clone https://github.com/yourusername/devlens.git
+git clone https://github.com/poseclx/devlens.git
 cd devlens
 pip install -e .
 ```
@@ -41,35 +41,13 @@ devlens review 42 --format markdown
 devlens review 42 --detail high
 ```
 
-## Example Output
-
-```
-PR #42 — Add user authentication middleware
-
-SUMMARY
-  Adds JWT-based auth middleware to the Express app. Touches 8 files, 320 lines changed.
-
-RISK AREAS (review carefully)
-  - src/middleware/auth.js       Token expiry logic may have edge case on refresh
-  - src/routes/user.js          New endpoint /api/user/me has no rate limiting
-  - config/env.example          JWT_SECRET added — make sure .env is in .gitignore
-
-SAFE TO SKIM
-  - tests/                      Unit tests for new middleware (looks correct)
-  - package.json                Dependency additions only (jsonwebtoken, express-jwt)
-  - README.md                   Docs update
-
-VERDICT
-  Needs attention on 2 security items before merge. Rest looks good.
-```
-
 ## Configuration
 
 Create a `.devlens.yml` in your project root:
 
 ```yaml
-model: gpt-4o          # LLM to use (gpt-4o, claude-3-5-sonnet)
-detail: medium         # low | medium | high
+model: gpt-4o
+detail: medium
 risk_focus:
   - security
   - breaking-changes
@@ -91,8 +69,6 @@ Then go to **Settings → Secrets and variables → Actions** and add the secret
 | OpenAI | `OPENAI_API_KEY` | platform.openai.com/api-keys |
 | Anthropic | `ANTHROPIC_API_KEY` | console.anthropic.com/keys |
 | Google Gemini | `GEMINI_API_KEY` | aistudio.google.com/apikey |
-
-Add only the one you use — DevLens auto-detects which provider is configured. `GITHUB_TOKEN` is provided automatically by GitHub Actions, no setup needed.
 
 ## Environment Variables
 
