@@ -195,7 +195,6 @@ def _static_onboard(snapshot: RepoSnapshot) -> OnboardingResult:
     langs = snapshot.languages or ["unknown"]
     dep_names = list(snapshot.dependency_files.keys())
 
-    # Guess entry points
     entry_points = []
     for fname in snapshot.file_contents:
         if fname in ("main.py", "app.py", "server.py", "index.ts", "index.js", "main.go", "main.rs"):
@@ -203,13 +202,11 @@ def _static_onboard(snapshot: RepoSnapshot) -> OnboardingResult:
     if not entry_points:
         entry_points = ["See README for entry points"]
 
-    # Key files (top-level source files)
     key_files = [
         {"file": f, "role": "Source file (role unknown — run with --ai for details)"}
         for f in list(snapshot.file_contents.keys())[:6]
     ]
 
-    # Getting started steps
     getting_started = ["Clone the repository"]
     if "requirements.txt" in dep_names:
         getting_started.append("pip install -r requirements.txt")
@@ -333,7 +330,6 @@ def analyze_repo(
         return _static_onboard(snapshot)
 
     prompt = _build_prompt(snapshot)
-    # api_key override: inject into env temporarily if provided
     if api_key:
         _inject_key(model, api_key)
 
