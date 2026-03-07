@@ -1,11 +1,11 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlens"
 version = "0.1.0"
-description = "AI-powered PR review assistant that tells you what actually matters"
+description = "A PR review assistant that tells you what actually matters"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
