@@ -128,7 +128,6 @@ def analyze_pr(pr: PRData, detail: str = "medium", config: dict | None = None) -
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        # Fallback: try to extract JSON block from response
         import re
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         data = json.loads(match.group()) if match else {}
