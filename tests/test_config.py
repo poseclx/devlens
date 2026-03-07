@@ -23,9 +23,7 @@ class TestLoadConfig:
         config_file = tmp_path / ".devlens.yml"
         config_file.write_text(yaml.dump({"model": "gemini-1.5-pro"}))
         cfg = load_config(start=tmp_path)
-        # User override applied
         assert cfg["model"] == "gemini-1.5-pro"
-        # Defaults still present
         assert "detail" in cfg
         assert "ignore_paths" in cfg
 
