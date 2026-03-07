@@ -213,7 +213,7 @@ def _html_wrap(title: str, body: str, module: str) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DevLens — {title}</title>
+<title>DevLens \u2014 {title}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>{_STYLES}</style>
@@ -232,7 +232,7 @@ def _html_wrap(title: str, body: str, module: str) -> str:
 </html>"""
 
 
-# ── Docs Health HTML ──────────────────────────────────────────
+# \u2500\u2500 Docs Health HTML \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 def render_docs_html(result) -> str:
     score = result.health_score
@@ -279,7 +279,7 @@ def render_docs_html(result) -> str:
   <div class="issue-header">
     <span class="badge {sbadge}">{issue.severity}</span>
     <span class="issue-title">{issue.title}</span>
-    <span class="file-chip">{issue.language} · block #{issue.block_index}</span>
+    <span class="file-chip">{issue.language} \u00b7 block #{issue.block_index}</span>
   </div>
   <p class="issue-desc">{issue.description}</p>
   <div class="issue-suggestion"><strong>Fix:</strong> {issue.suggestion}</div>
@@ -292,10 +292,10 @@ def render_docs_html(result) -> str:
             body += f"<li>{rec}</li>"
         body += "</ul></div>"
 
-    return _html_wrap(f"Docs Health — {Path(result.file_path).name}", body, "docs check")
+    return _html_wrap(f"Docs Health \u2014 {Path(result.file_path).name}", body, "docs check")
 
 
-# ── PR Review HTML ────────────────────────────────────────────
+# \u2500\u2500 PR Review HTML \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 def render_pr_html(result, repo: str = "", pr_number: int = 0) -> str:
     score = result.risk_score if hasattr(result, "risk_score") else 0
@@ -353,7 +353,7 @@ def render_pr_html(result, repo: str = "", pr_number: int = 0) -> str:
     return _html_wrap(f"PR Review #{pr_number}", body, "review")
 
 
-# ── Onboarding HTML ───────────────────────────────────────────
+# \u2500\u2500 Onboarding HTML \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 def render_onboard_html(result, repo_name: str = "") -> str:
     overview = getattr(result, "overview", "")
@@ -410,7 +410,7 @@ def render_onboard_html(result, repo_name: str = "") -> str:
   <p>{where_to_start}</p>
 </div>"""
 
-    return _html_wrap(f"Onboarding — {repo_name}", body, "onboard")
+    return _html_wrap(f"Onboarding \u2014 {repo_name}", body, "onboard")
 
 
 def save_html(html: str, output_path: str) -> None:
