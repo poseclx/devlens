@@ -77,7 +77,6 @@ class TestBuildPrompt:
     def test_detail_low_truncates_patch(self, sample_pr_data):
         prompt_low = _build_prompt(sample_pr_data, detail="low")
         prompt_high = _build_prompt(sample_pr_data, detail="high")
-        # low detail should produce shorter or equal length prompt
         assert len(prompt_low) <= len(prompt_high)
 
 
@@ -118,7 +117,6 @@ class TestAnalyzePr:
     def test_handles_malformed_json_gracefully(self, sample_pr_data):
         with patch("devlens.analyzer._call_llm", return_value="not json at all"):
             result = analyze_pr(sample_pr_data)
-        # Should not raise, just return empty fields
         assert isinstance(result, ReviewResult)
         assert result.summary == ""
 
