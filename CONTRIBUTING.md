@@ -5,7 +5,7 @@ Thanks for your interest! Here's how to get started.
 ## Setup
 
 ```bash
-git clone https://github.com/yourusername/devlens.git
+git clone https://github.com/poseclx/devlens.git
 cd devlens
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
