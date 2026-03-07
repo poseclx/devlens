@@ -20,7 +20,7 @@ class PRData:
     additions: int
     deletions: int
     changed_files: int
-    files: list[dict] = field(default_factory=list)
+    files: list[dict] = field(default_factory=list)   # [{filename, status, patch, additions, deletions}]
     labels: list[str] = field(default_factory=list)
     linked_issues: list[str] = field(default_factory=list)
 
@@ -37,6 +37,18 @@ def fetch_pr(repo: str, pr_number: int) -> PRData:
     """Fetch PR metadata and file diffs from GitHub."""
     with httpx.Client(headers=_headers(), timeout=30) as client:
         pr_resp = client.get(f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}")
+        if pr_resp.status_code == 404:
+            raise SystemExit(
+                f"\n  Error: PR #{pr_number} not found in '{repo}'.\n"
+                f"  Check that the repo exists and the PR number is correct.\n"
+                f"  For private repos, set GITHUB_TOKEN environment variable.\n"
+            )
+        if pr_resp.status_code == 403:
+            raise SystemExit(
+                f"\n  Error: Access denied to '{repo}'.\n"
+                f"  GitHub API rate limit may be exceeded.\n"
+                f"  Set GITHUB_TOKEN environment variable for higher limits.\n"
+            )
         pr_resp.raise_for_status()
         pr = pr_resp.json()
 
