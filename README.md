@@ -30,6 +30,12 @@ Code reviews are critical but time-consuming. DevLens surfaces what actually mat
 ## Installation
 
 ```bash
+pip install devlens
+```
+
+Or install directly from GitHub:
+
+```bash
 pip install git+https://github.com/poseclx/devlens.git
 ```
 
@@ -40,8 +46,6 @@ git clone https://github.com/poseclx/devlens.git
 cd devlens
 pip install -e .
 ```
-
-> **Note:** PyPI release coming soon — `pip install devlens` will be available after the first release.
 
 ## Usage
 
