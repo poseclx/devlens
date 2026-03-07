@@ -1,0 +1,111 @@
+name: DevLens PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  devlens-review:
+    name: AI PR Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-devlens
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install DevLens
+        run: pip install devlens
+
+      - name: Run PR Review (Markdown + HTML)
+        env:
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          AI_FLAG=""
+          MODEL_FLAG=""
+          if [ -n "$OPENAI_API_KEY" ]; then
+            AI_FLAG="--ai"
+          elif [ -n "$ANTHROPIC_API_KEY" ]; then
+            AI_FLAG="--ai"
+          elif [ -n "$GEMINI_API_KEY" ]; then
+            AI_FLAG="--ai"
+          fi
+
+          devlens review ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --format markdown \
+            --output devlens-review.md $AI_FLAG
+
+          devlens review ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --format html \
+            --output devlens-review.html $AI_FLAG
+
+      - name: Upload HTML Report as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: devlens-pr-review-${{ github.event.pull_request.number }}
+          path: devlens-review.html
+          retention-days: 30
+
+      - name: Post Review as PR Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('devlens-review.md', 'utf8');
+            const header = '<!-- devlens-review -->';
+            const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const fullBody = [
+              header,
+              '## 🔍 DevLens AI Review',
+              '',
+              body,
+              '',
+              '---',
+              `📄 [Full HTML Report](${artifactUrl}) — \`devlens-pr-review-${{ github.event.pull_request.number }}\` artifact.`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(header));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: fullBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody,
+              });
+            }
