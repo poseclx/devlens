@@ -16,7 +16,7 @@ from rich.table import Table
 from rich import box
 
 from devlens.github import fetch_pr
-from devlens.analyzer import analyze_pr
+from devlens.analyzer import analyze_pr, ReviewResult
 from devlens.config import load_config
 
 console = Console()
@@ -431,6 +431,68 @@ def doctor() -> None:
     console.print()
 
 
+def _static_review(pr) -> ReviewResult:
+    """Quick heuristic review without AI — classifies files by risk based on patterns."""
+    RISKY_PATTERNS = {
+        "security": ["auth", "login", "password", "token", "secret", "crypt", "jwt", "oauth", "session"],
+        "config": ["config", "env", ".yml", ".yaml", ".toml", "settings", "dockerfile", "docker-compose"],
+        "database": ["migration", "schema", "model", "sql", "db"],
+        "api": ["route", "endpoint", "controller", "handler", "middleware", "api"],
+    }
+    SAFE_PATTERNS = [".md", ".txt", ".rst", "readme", "changelog", "license", "docs/",
+                     ".lock", "package-lock", ".gitignore", ".editorconfig"]
+
+    risk_items = []
+    safe_items = []
+
+    for f in pr.files:
+        name = f["filename"].lower()
+        additions = f.get("additions", 0)
+        deletions = f.get("deletions", 0)
+
+        # Check safe patterns first
+        if any(pat in name for pat in SAFE_PATTERNS):
+            safe_items.append({"file": f["filename"], "reason": "Documentation or config — safe to skim"})
+            continue
+
+        # Check risky patterns
+        flagged = False
+        for category, patterns in RISKY_PATTERNS.items():
+            if any(pat in name for pat in patterns):
+                risk_items.append({
+                    "file": f["filename"],
+                    "reason": f"Touches {category}-related code (+{additions} -{deletions})",
+                    "severity": "high" if additions + deletions > 100 else "medium",
+                })
+                flagged = True
+                break
+
+        if not flagged:
+            if additions + deletions > 200:
+                risk_items.append({
+                    "file": f["filename"],
+                    "reason": f"Large change (+{additions} -{deletions})",
+                    "severity": "medium",
+                })
+            else:
+                safe_items.append({"file": f["filename"], "reason": f"Standard change (+{additions} -{deletions})"})
+
+    total_changes = pr.additions + pr.deletions
+    if risk_items:
+        verdict = f"Needs careful review — {len(risk_items)} file(s) flagged across {total_changes} line changes."
+    else:
+        verdict = f"Looks straightforward — {total_changes} line changes, no risky patterns detected."
+
+    return ReviewResult(
+        pr_number=pr.number,
+        title=pr.title,
+        summary=f"PR changes {pr.changed_files} file(s) with +{pr.additions} -{pr.deletions} lines. (Static analysis — use --ai for deeper review)",
+        risk_items=risk_items,
+        safe_items=safe_items,
+        verdict=verdict,
+    )
+
+
 # ── devlens review ────────────────────────────────────────────
 
 @main.command()
@@ -491,14 +553,20 @@ def review(
     with console.status(f"[bold cyan]Fetching PR #{pr_number} from {resolved_repo}..."):
         pr_data = fetch_pr(resolved_repo, pr_number)
 
+    if ai and resolved_model:
+        cfg["model"] = resolved_model
+
     status_msg = f"[bold cyan]Analyzing with {resolved_model}..." if ai else "[bold cyan]Running static analysis..."
     with console.status(status_msg):
-        try:
-            result = analyze_pr(pr_data, detail=detail_level, config=cfg, use_ai=ai, model=resolved_model or "gpt-4o")
-        except EnvironmentError as exc:
-            console.print(f"[bold yellow]Warning:[/] {exc}")
-            console.print("[dim]Falling back to static analysis...[/]")
-            result = analyze_pr(pr_data, detail=detail_level, config=cfg, use_ai=False)
+        if ai:
+            try:
+                result = analyze_pr(pr_data, detail=detail_level, config=cfg)
+            except EnvironmentError as exc:
+                console.print(f"[bold yellow]Warning:[/] {exc}")
+                console.print("[dim]Falling back to static analysis...[/]")
+                result = _static_review(pr_data)
+        else:
+            result = _static_review(pr_data)
 
     if output_format == "html":
         from devlens.reporter import render_pr_html, save_html
