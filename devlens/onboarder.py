@@ -195,6 +195,7 @@ def _static_onboard(snapshot: RepoSnapshot) -> OnboardingResult:
     langs = snapshot.languages or ["unknown"]
     dep_names = list(snapshot.dependency_files.keys())
 
+    # Guess entry points
     entry_points = []
     for fname in snapshot.file_contents:
         if fname in ("main.py", "app.py", "server.py", "index.ts", "index.js", "main.go", "main.rs"):
@@ -202,11 +203,13 @@ def _static_onboard(snapshot: RepoSnapshot) -> OnboardingResult:
     if not entry_points:
         entry_points = ["See README for entry points"]
 
+    # Key files (top-level source files)
     key_files = [
         {"file": f, "role": "Source file (role unknown — run with --ai for details)"}
         for f in list(snapshot.file_contents.keys())[:6]
     ]
 
+    # Getting started steps
     getting_started = ["Clone the repository"]
     if "requirements.txt" in dep_names:
         getting_started.append("pip install -r requirements.txt")
@@ -259,10 +262,17 @@ def _call_llm(model: str, prompt: str) -> str:
         return _anthropic(model, prompt)
     elif model.startswith("gemini"):
         return _gemini(model, prompt)
+    elif model.startswith("groq/"):
+        return _groq(model.removeprefix("groq/"), prompt)
+    elif model.startswith("ollama/"):
+        return _ollama(model.removeprefix("ollama/"), prompt)
+    elif model.startswith("openrouter/"):
+        return _openrouter(model.removeprefix("openrouter/"), prompt)
     else:
         raise ValueError(
-            f"Unsupported model: {model!r}. "
-            "Use gpt-* / o1-* / o3-* (OpenAI), claude-* (Anthropic), or gemini-* (Google)."
+            f"Unsupported model: {model!r}. Supported prefixes: "
+            "gpt-*, o1-*, o3-* (OpenAI), claude-* (Anthropic), gemini-* (Google), "
+            "groq/* (Groq), ollama/* (Ollama), openrouter/* (OpenRouter)."
         )
 
 
@@ -319,6 +329,97 @@ def _gemini(model: str, prompt: str) -> str:
     return response.text or "{}"
 
 
+# ── Free / alternative providers ──────────────────────────────
+
+
+def _groq(model: str, prompt: str) -> str:
+    """Groq Cloud — free tier, extremely fast inference."""
+    from groq import Groq
+
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "GROQ_API_KEY environment variable is not set. "
+            "Get a free key at https://console.groq.com/keys"
+        )
+    client = Groq(api_key=key)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content or "{}"
+
+
+def _ollama(model: str, prompt: str) -> str:
+    """Ollama — 100% local, completely free, no API key needed."""
+    import httpx
+
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+    try:
+        resp = httpx.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+    except httpx.ConnectError:
+        raise EnvironmentError(
+            f"Cannot connect to Ollama at {base_url}. "
+            "Make sure Ollama is running: ollama serve"
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise EnvironmentError(
+                f"Model '{model}' not found in Ollama. "
+                f"Pull it first: ollama pull {model}"
+            )
+        raise
+
+    data = resp.json()
+    return data.get("message", {}).get("content", "{}")
+
+
+def _openrouter(model: str, prompt: str) -> str:
+    """OpenRouter — unified gateway to 100+ models, many free."""
+    from openai import OpenAI
+
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "OPENROUTER_API_KEY environment variable is not set. "
+            "Get a key at https://openrouter.ai/keys"
+        )
+    client = OpenAI(
+        api_key=key,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content or "{}"
+
+
 def analyze_repo(
     snapshot: RepoSnapshot,
     use_ai: bool = False,
@@ -330,6 +431,7 @@ def analyze_repo(
         return _static_onboard(snapshot)
 
     prompt = _build_prompt(snapshot)
+    # api_key override: inject into env temporarily if provided
     if api_key:
         _inject_key(model, api_key)
 
@@ -359,5 +461,11 @@ def _inject_key(model: str, api_key: str) -> None:
         os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
     elif model.startswith("gemini"):
         os.environ.setdefault("GEMINI_API_KEY", api_key)
+    elif model.startswith("groq/"):
+        os.environ.setdefault("GROQ_API_KEY", api_key)
+    elif model.startswith("openrouter/"):
+        os.environ.setdefault("OPENROUTER_API_KEY", api_key)
+    elif model.startswith("ollama/"):
+        pass  # Ollama is local, no API key needed
     else:
         os.environ.setdefault("OPENAI_API_KEY", api_key)
