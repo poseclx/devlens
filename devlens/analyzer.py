@@ -128,6 +128,7 @@ def analyze_pr(pr: PRData, detail: str = "medium", config: dict | None = None) -
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
+        # Fallback: try to extract JSON block from response
         import re
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         data = json.loads(match.group()) if match else {}
@@ -150,11 +151,17 @@ def _call_llm(model: str, prompt: str) -> str:
         return _anthropic(model, prompt)
     elif model.startswith("gemini"):
         return _gemini(model, prompt)
+    elif model.startswith("groq/"):
+        return _groq(model.removeprefix("groq/"), prompt)
+    elif model.startswith("ollama/"):
+        return _ollama(model.removeprefix("ollama/"), prompt)
+    elif model.startswith("openrouter/"):
+        return _openrouter(model.removeprefix("openrouter/"), prompt)
     else:
         raise ValueError(
-            f"Unsupported model: {model!r}. "
-            "Use a gpt-* / o1-* / o3-* model (OpenAI), "
-            "claude-* model (Anthropic), or gemini-* model (Google)."
+            f"Unsupported model: {model!r}. Supported prefixes: "
+            "gpt-*, o1-*, o3-* (OpenAI), claude-* (Anthropic), gemini-* (Google), "
+            "groq/* (Groq), ollama/* (Ollama), openrouter/* (OpenRouter)."
         )
 
 
@@ -209,3 +216,107 @@ def _gemini(model: str, prompt: str) -> str:
         ),
     )
     return response.text or "{}"
+
+
+# ── Free / alternative providers ──────────────────────────────
+
+
+def _groq(model: str, prompt: str) -> str:
+    """Groq Cloud — free tier, extremely fast inference.
+
+    Uses the groq Python SDK (OpenAI-compatible).
+    Get a free key at https://console.groq.com/keys
+    """
+    from groq import Groq
+
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "GROQ_API_KEY environment variable is not set. "
+            "Get a free key at https://console.groq.com/keys"
+        )
+    client = Groq(api_key=key)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content or "{}"
+
+
+def _ollama(model: str, prompt: str) -> str:
+    """Ollama — 100% local, completely free, no API key needed.
+
+    Requires Ollama running locally: https://ollama.com
+    Start with: ollama serve && ollama pull llama3.1
+    """
+    import httpx
+
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+    try:
+        resp = httpx.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+    except httpx.ConnectError:
+        raise EnvironmentError(
+            f"Cannot connect to Ollama at {base_url}. "
+            "Make sure Ollama is running: ollama serve"
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise EnvironmentError(
+                f"Model '{model}' not found in Ollama. "
+                f"Pull it first: ollama pull {model}"
+            )
+        raise
+
+    data = resp.json()
+    return data.get("message", {}).get("content", "{}")
+
+
+def _openrouter(model: str, prompt: str) -> str:
+    """OpenRouter — unified gateway to 100+ models, many free.
+
+    Uses OpenAI-compatible API. Get a key at https://openrouter.ai/keys
+    Free models include: meta-llama/llama-3.1-8b-instruct:free,
+    google/gemma-2-9b-it:free, mistralai/mistral-7b-instruct:free
+    """
+    from openai import OpenAI
+
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "OPENROUTER_API_KEY environment variable is not set. "
+            "Get a key at https://openrouter.ai/keys"
+        )
+    client = OpenAI(
+        api_key=key,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content or "{}"
