@@ -6,6 +6,8 @@ Supports .devlens.yml in the project root with sections for:
   - comment (PR comment bot settings)
   - cache (incremental analysis caching)
   - rules (custom rule engine)
+  - dashboard (web dashboard settings)
+  - scoreboard (team scoreboard settings)
   - ignore_paths (files to skip)
 
 Example .devlens.yml:
@@ -48,6 +50,23 @@ Example .devlens.yml:
         - no-bare-except
         - no-global
       custom_rules: []       # inline custom rules (same format as rule files)
+
+    dashboard:
+      theme: dark            # dark | light
+      output: devlens-dashboard.html
+      sections:              # which sections to include
+        - complexity
+        - security
+        - dependencies
+        - docs
+        - rules
+      auto_open: true
+
+    scoreboard:
+      enabled: true
+      dir: .devlens-scores   # score history directory
+      auto_record: false     # auto-record after each review?
+      output: devlens-scoreboard.html
 
     ignore_paths:
       - "*.lock"
@@ -96,6 +115,18 @@ DEFAULT_CONFIG: dict = {
         ],
         "custom_rules": [],
     },
+    "dashboard": {
+        "theme": "dark",
+        "output": "devlens-dashboard.html",
+        "sections": ["complexity", "security", "dependencies", "docs", "rules"],
+        "auto_open": True,
+    },
+    "scoreboard": {
+        "enabled": True,
+        "dir": ".devlens-scores",
+        "auto_record": False,
+        "output": "devlens-scoreboard.html",
+    },
 }
 
 CONFIG_FILENAMES = [".devlens.yml", ".devlens.yaml", "devlens.yml"]
@@ -143,3 +174,13 @@ def get_cache_config(cfg: dict) -> dict:
 def get_rules_config(cfg: dict) -> dict:
     """Extract rules section with defaults applied."""
     return _deep_merge(DEFAULT_CONFIG["rules"], cfg.get("rules", {}))
+
+
+def get_dashboard_config(cfg: dict) -> dict:
+    """Extract dashboard section with defaults applied."""
+    return _deep_merge(DEFAULT_CONFIG["dashboard"], cfg.get("dashboard", {}))
+
+
+def get_scoreboard_config(cfg: dict) -> dict:
+    """Extract scoreboard section with defaults applied."""
+    return _deep_merge(DEFAULT_CONFIG["scoreboard"], cfg.get("scoreboard", {}))
