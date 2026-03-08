@@ -35,7 +35,7 @@ def _headers() -> dict[str, str]:
 
 def fetch_pr(repo: str, pr_number: int) -> PRData:
     """Fetch PR metadata and file diffs from GitHub."""
-    with httpx.Client(headers=_headers(), timeout=30) as client:
+    with httpx.Client(headers=_headers(), timeout=30, follow_redirects=True) as client:
         pr_resp = client.get(f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}")
         if pr_resp.status_code == 404:
             raise SystemExit(
