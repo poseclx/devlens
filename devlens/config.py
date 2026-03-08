@@ -4,6 +4,8 @@ Supports .devlens.yml in the project root with sections for:
   - model / detail / repo (general)
   - security (scanner rules and settings)
   - comment (PR comment bot settings)
+  - cache (incremental analysis caching)
+  - rules (custom rule engine)
   - ignore_paths (files to skip)
 
 Example .devlens.yml:
@@ -28,6 +30,24 @@ Example .devlens.yml:
       enabled: false         # auto-comment on every review?
       template: default      # default | minimal | full
       include_security: true
+
+    cache:
+      enabled: true
+      dir: .devlens-cache    # cache directory (relative to project root)
+      ttl_days: 7            # time-to-live in days
+
+    rules:
+      enabled: true
+      files:                 # external rule files
+        - .devlens-rules.yml
+      builtin_ast:           # built-in AST checks to enable
+        - no-eval
+        - no-exec
+        - no-star-import
+        - no-mutable-default
+        - no-bare-except
+        - no-global
+      custom_rules: []       # inline custom rules (same format as rule files)
 
     ignore_paths:
       - "*.lock"
@@ -57,6 +77,24 @@ DEFAULT_CONFIG: dict = {
         "enabled": False,
         "template": "default",
         "include_security": True,
+    },
+    "cache": {
+        "enabled": True,
+        "dir": ".devlens-cache",
+        "ttl_days": 7,
+    },
+    "rules": {
+        "enabled": True,
+        "files": [".devlens-rules.yml"],
+        "builtin_ast": [
+            "no-eval",
+            "no-exec",
+            "no-star-import",
+            "no-mutable-default",
+            "no-bare-except",
+            "no-global",
+        ],
+        "custom_rules": [],
     },
 }
 
@@ -95,3 +133,13 @@ def get_security_config(cfg: dict) -> dict:
 def get_comment_config(cfg: dict) -> dict:
     """Extract comment section with defaults applied."""
     return _deep_merge(DEFAULT_CONFIG["comment"], cfg.get("comment", {}))
+
+
+def get_cache_config(cfg: dict) -> dict:
+    """Extract cache section with defaults applied."""
+    return _deep_merge(DEFAULT_CONFIG["cache"], cfg.get("cache", {}))
+
+
+def get_rules_config(cfg: dict) -> dict:
+    """Extract rules section with defaults applied."""
+    return _deep_merge(DEFAULT_CONFIG["rules"], cfg.get("rules", {}))
