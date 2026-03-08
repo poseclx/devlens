@@ -17,7 +17,15 @@ from rich import box
 
 from devlens.github import fetch_pr
 from devlens.analyzer import analyze_pr, ReviewResult
-from devlens.config import load_config, get_cache_config, get_rules_config, get_dashboard_config, get_scoreboard_config
+from devlens.config import load_config, get_cache_config, get_rules_config, get_dashboard_config, get_scoreboard_config, get_plugin_config, get_ai_review_config
+from devlens.plugins import (
+    PluginManager,
+    PluginType,
+    install_plugin_from_pip,
+    uninstall_plugin_from_pip,
+    create_plugin_template,
+)
+from devlens.ai_review import run_ai_review_sync, configure_api_key, ReviewMode
 from devlens.ignore import load_ignore_patterns
 
 console = Console()
@@ -382,7 +390,7 @@ def _run_init_flow() -> None:
 # ── main group ────────────────────────────────────────────────
 
 @click.group()
-@click.version_option(version="0.6.0", prog_name="devlens")
+@click.version_option(version="0.7.0", prog_name="devlens")
 def main() -> None:
     """DevLens — AI-powered developer assistant.
 
@@ -1939,6 +1947,491 @@ def scoreboard_reset_cmd(target: str, yes: bool) -> None:
         console.print("\n[green]Score history deleted.[/]\n")
     else:
         console.print("\n[yellow]No history file found.[/]\n")
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  PLUGIN MANAGEMENT COMMANDS
+# ═══════════════════════════════════════════════════════════════════
+
+
+@main.group()
+def plugin():
+    """Manage DevLens plugins."""
+    pass
+
+
+@plugin.command("list")
+@click.option("--target", "-t", default=".", help="Project root.")
+@click.option("--plugin-dir", default=None, help="Custom plugin directory.")
+def plugin_list(target: str, plugin_dir: str | None):
+    """List discovered and loaded plugins."""
+    cfg = load_config(Path(target))
+    if plugin_dir:
+        cfg.setdefault("plugins", {})["plugin_dir"] = plugin_dir
+
+    pm = PluginManager(cfg)
+    pm.discover()
+    pm.load_all()
+
+    plugins = pm.list_plugins()
+    if not plugins:
+        console.print("\n[yellow]No plugins found.[/]\n")
+        console.print("[dim]Plugins are discovered from:[/]")
+        console.print("[dim]  • entry-points (devlens.plugins group)[/]")
+        console.print("[dim]  • .devlens-plugins/ directory[/]")
+        console.print("[dim]  • --plugin-dir option[/]\n")
+        return
+
+    table = Table(title="DevLens Plugins", box=box.ROUNDED)
+    table.add_column("Name", style="cyan")
+    table.add_column("Version", style="green")
+    table.add_column("Type", style="magenta")
+    table.add_column("Status", style="bold")
+    table.add_column("Priority", justify="right")
+    table.add_column("Languages")
+
+    for p in plugins:
+        status = "[green]loaded[/]" if p["loaded"] else "[dim]discovered[/]"
+        if p.get("enabled") is False:
+            status = "[yellow]disabled[/]"
+        langs = ", ".join(p["languages"][:3])
+        if len(p["languages"]) > 3:
+            langs += "..."
+        table.add_row(
+            p["name"], p["version"], p["type"],
+            status, str(p["priority"]), langs,
+        )
+
+    console.print()
+    console.print(table)
+    console.print(f"\n[dim]{len(plugins)} plugin(s) total[/]\n")
+
+    if pm.errors:
+        console.print("[red]Errors during discovery/loading:[/]")
+        for name, err in pm.errors:
+            console.print(f"  [red]• {name}:[/] {err}")
+        console.print()
+
+
+@plugin.command("install")
+@click.argument("package")
+def plugin_install(package: str):
+    """Install a plugin package via pip."""
+    console.print(f"\n[cyan]Installing plugin:[/] {package}")
+    if install_plugin_from_pip(package):
+        console.print(f"[green]Successfully installed {package}[/]\n")
+    else:
+        console.print(f"[red]Failed to install {package}[/]\n")
+        raise SystemExit(1)
+
+
+@plugin.command("uninstall")
+@click.argument("package")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
+def plugin_uninstall(package: str, yes: bool):
+    """Uninstall a plugin package."""
+    if not yes:
+        if not click.confirm(f"Uninstall {package}?"):
+            console.print("[dim]Cancelled.[/]")
+            return
+
+    console.print(f"\n[cyan]Uninstalling:[/] {package}")
+    if uninstall_plugin_from_pip(package):
+        console.print(f"[green]Successfully uninstalled {package}[/]\n")
+    else:
+        console.print(f"[red]Failed to uninstall {package}[/]\n")
+        raise SystemExit(1)
+
+
+@plugin.command("enable")
+@click.argument("name")
+@click.option("--target", "-t", default=".", help="Project root.")
+def plugin_enable(name: str, target: str):
+    """Enable a plugin."""
+    cfg = load_config(Path(target))
+    pm = PluginManager(cfg)
+    pm.discover()
+    pm.load_all()
+
+    if pm.enable(name):
+        console.print(f"\n[green]Plugin '{name}' enabled.[/]\n")
+    else:
+        console.print(f"\n[red]Plugin '{name}' not found or not loaded.[/]\n")
+
+
+@plugin.command("disable")
+@click.argument("name")
+@click.option("--target", "-t", default=".", help="Project root.")
+def plugin_disable(name: str, target: str):
+    """Disable a plugin (keeps it loaded but skips execution)."""
+    cfg = load_config(Path(target))
+    pm = PluginManager(cfg)
+    pm.discover()
+    pm.load_all()
+
+    if pm.disable(name):
+        console.print(f"\n[yellow]Plugin '{name}' disabled.[/]\n")
+    else:
+        console.print(f"\n[red]Plugin '{name}' not found or not loaded.[/]\n")
+
+
+@plugin.command("info")
+@click.argument("name")
+@click.option("--target", "-t", default=".", help="Project root.")
+def plugin_info(name: str, target: str):
+    """Show detailed information about a plugin."""
+    cfg = load_config(Path(target))
+    pm = PluginManager(cfg)
+    pm.discover()
+    pm.load_all()
+
+    info = pm.plugin_info(name)
+    if not info:
+        console.print(f"\n[red]Plugin '{name}' not found.[/]\n")
+        return
+
+    panel_lines = [
+        f"[bold cyan]{info['name']}[/] v{info['version']}",
+        f"[dim]{info['description']}[/]" if info["description"] else "",
+        "",
+        f"  [bold]Type:[/]       {info['type']}",
+        f"  [bold]Author:[/]     {info['author'] or 'unknown'}",
+        f"  [bold]Priority:[/]   {info['priority']}",
+        f"  [bold]Languages:[/]  {', '.join(info['languages'])}",
+        f"  [bold]Min DevLens:[/] {info['min_devlens_version']}",
+        f"  [bold]Loaded:[/]     {'yes' if info['loaded'] else 'no'}",
+        f"  [bold]Enabled:[/]    {'yes' if info.get('enabled') else 'no' if info.get('enabled') is not None else 'n/a'}",
+    ]
+    if info["dependencies"]:
+        panel_lines.append(f"  [bold]Deps:[/]       {', '.join(info['dependencies'])}")
+    if info["tags"]:
+        panel_lines.append(f"  [bold]Tags:[/]       {', '.join(info['tags'])}")
+    if info["homepage"]:
+        panel_lines.append(f"  [bold]Homepage:[/]   {info['homepage']}")
+
+    console.print()
+    console.print(Panel("\n".join(panel_lines), title="Plugin Info", box=box.ROUNDED))
+    console.print()
+
+
+@plugin.command("new")
+@click.argument("name")
+@click.option(
+    "--type", "-T", "ptype",
+    type=click.Choice(["checker", "fixer", "reporter", "formatter", "analyzer"]),
+    default="checker",
+    help="Plugin type.",
+)
+@click.option("--dir", "-d", "directory", default=".devlens-plugins", help="Output directory.")
+def plugin_new(name: str, ptype: str, directory: str):
+    """Scaffold a new plugin from a template."""
+    pt = PluginType(ptype)
+    filepath = create_plugin_template(Path(directory), name, pt)
+    console.print(f"\n[green]Created plugin template:[/] {filepath}")
+    console.print(f"[dim]Edit the file to implement your {ptype} logic.[/]\n")
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  AI REVIEW COMMANDS
+# ═══════════════════════════════════════════════════════════════════
+
+
+@main.group("ai-review")
+def ai_review():
+    """AI-powered code review using LLMs."""
+    pass
+
+
+@ai_review.command("analyze")
+@click.argument("paths", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--target", "-t", default=".", help="Project root.")
+@click.option("--json-output", "-j", is_flag=True, help="Output raw JSON.")
+def ai_analyze(paths: tuple, target: str, json_output: bool):
+    """Analyze files with AI-powered review."""
+    cfg = load_config(Path(target))
+    file_paths = [Path(p) for p in paths]
+
+    console.print(f"\n[cyan]AI Review:[/] Analyzing {len(file_paths)} file(s)...\n")
+
+    result = run_ai_review_sync(file_paths, cfg, ReviewMode.REVIEW)
+
+    if "error" in result:
+        console.print(f"[red]Error:[/] {result['error']}")
+        raise SystemExit(1)
+
+    if json_output:
+        console.print_json(json.dumps(result, indent=2, default=str))
+        return
+
+    results = result.get("results", {})
+    total_issues = 0
+    for filepath, issues in results.items():
+        if not issues:
+            continue
+        console.print(f"[bold]{filepath}[/]")
+        for issue in issues:
+            sev = issue.get("severity", "info")
+            color = {"error": "red", "warning": "yellow", "info": "blue", "suggestion": "green"}.get(sev, "white")
+            line = issue.get("line", "?")
+            msg = issue.get("message", "")
+            console.print(f"  [{color}]{sev.upper():>10}[/] L{line}: {msg}")
+            if issue.get("suggestion"):
+                console.print(f"             [dim]→ {issue['suggestion']}[/]")
+            total_issues += 1
+        console.print()
+
+    stats = result.get("stats", {})
+    console.print(f"[dim]Total: {total_issues} issue(s) | Tokens used: {stats.get('total_tokens', 0):,}[/]\n")
+
+
+@ai_review.command("suggest-fixes")
+@click.argument("paths", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--target", "-t", default=".", help="Project root.")
+@click.option("--json-output", "-j", is_flag=True, help="Output raw JSON.")
+def ai_suggest_fixes(paths: tuple, target: str, json_output: bool):
+    """Review files and suggest concrete fixes."""
+    cfg = load_config(Path(target))
+    file_paths = [Path(p) for p in paths]
+
+    console.print(f"\n[cyan]AI Review:[/] Finding fixes for {len(file_paths)} file(s)...\n")
+
+    result = run_ai_review_sync(file_paths, cfg, ReviewMode.SUGGEST_FIXES)
+
+    if "error" in result:
+        console.print(f"[red]Error:[/] {result['error']}")
+        raise SystemExit(1)
+
+    if json_output:
+        console.print_json(json.dumps(result, indent=2, default=str))
+        return
+
+    results = result.get("results", {})
+    for filepath, fixes in results.items():
+        if not fixes:
+            continue
+        console.print(f"[bold]{filepath}[/]")
+        for i, fix in enumerate(fixes, 1):
+            console.print(f"  [cyan]Fix #{i}[/] (L{fix.get('line_start', '?')}-{fix.get('line_end', '?')})")
+            console.print(f"    [dim]Type:[/] {fix.get('fix_type', 'replace')}")
+            if fix.get("explanation"):
+                console.print(f"    [dim]Why:[/]  {fix['explanation']}")
+            if fix.get("original"):
+                console.print(f"    [red]- {fix['original']}[/]")
+            if fix.get("replacement"):
+                console.print(f"    [green]+ {fix['replacement']}[/]")
+            console.print()
+
+    stats = result.get("stats", {})
+    console.print(f"[dim]Tokens used: {stats.get('total_tokens', 0):,}[/]\n")
+
+
+@ai_review.command("explain")
+@click.argument("paths", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--target", "-t", default=".", help="Project root.")
+@click.option("--json-output", "-j", is_flag=True, help="Output raw JSON.")
+def ai_explain(paths: tuple, target: str, json_output: bool):
+    """Explain code in human-readable terms."""
+    cfg = load_config(Path(target))
+    file_paths = [Path(p) for p in paths]
+
+    console.print(f"\n[cyan]AI Review:[/] Explaining {len(file_paths)} file(s)...\n")
+
+    result = run_ai_review_sync(file_paths, cfg, ReviewMode.EXPLAIN)
+
+    if "error" in result:
+        console.print(f"[red]Error:[/] {result['error']}")
+        raise SystemExit(1)
+
+    if json_output:
+        console.print_json(json.dumps(result, indent=2, default=str))
+        return
+
+    results = result.get("results", {})
+    for filepath, explanation in results.items():
+        console.print(Panel(
+            f"[bold]{explanation.get('summary', 'No summary')}[/]\n\n"
+            + ("[cyan]Components:[/]\n" + "\n".join(f"  • {c}" for c in explanation.get("components", [])) + "\n\n" if explanation.get("components") else "")
+            + ("[magenta]Patterns:[/]\n" + "\n".join(f"  • {p}" for p in explanation.get("patterns", [])) + "\n\n" if explanation.get("patterns") else "")
+            + ("[yellow]Notes:[/]\n" + "\n".join(f"  • {n}" for n in explanation.get("notes", [])) if explanation.get("notes") else ""),
+            title=str(filepath),
+            box=box.ROUNDED,
+        ))
+        console.print()
+
+    stats = result.get("stats", {})
+    console.print(f"[dim]Tokens used: {stats.get('total_tokens', 0):,}[/]\n")
+
+
+@ai_review.command("commit-msg")
+@click.argument("paths", nargs=-1, type=click.Path(exists=True))
+@click.option("--stdin", "use_stdin", is_flag=True, help="Read diff from stdin.")
+@click.option("--copy", "copy_clip", is_flag=True, help="Copy to clipboard.")
+def ai_commit_msg(paths: tuple, use_stdin: bool, copy_clip: bool):
+    """Generate a conventional commit message."""
+    cfg = load_config(Path("."))
+
+    if use_stdin:
+        import sys as _sys
+        diff_text = _sys.stdin.read()
+        # Write to temp file for the API
+        tmp = Path("/tmp/devlens_diff.txt")
+        tmp.write_text(diff_text)
+        file_paths = [tmp]
+    elif paths:
+        file_paths = [Path(p) for p in paths]
+    else:
+        # Try git diff
+        try:
+            diff_result = subprocess.run(
+                ["git", "diff", "--cached"], capture_output=True, text=True
+            )
+            if not diff_result.stdout.strip():
+                diff_result = subprocess.run(
+                    ["git", "diff"], capture_output=True, text=True
+                )
+            if diff_result.stdout.strip():
+                tmp = Path("/tmp/devlens_diff.txt")
+                tmp.write_text(diff_result.stdout)
+                file_paths = [tmp]
+            else:
+                console.print("[yellow]No diff found. Stage changes or provide file paths.[/]")
+                return
+        except FileNotFoundError:
+            console.print("[red]git not found. Provide file paths or use --stdin.[/]")
+            return
+
+    console.print("\n[cyan]AI Review:[/] Generating commit message...\n")
+
+    result = run_ai_review_sync(file_paths, cfg, ReviewMode.COMMIT_MSG)
+
+    if "error" in result:
+        console.print(f"[red]Error:[/] {result['error']}")
+        raise SystemExit(1)
+
+    msg_data = result.get("result", {})
+    subject = msg_data.get("subject", "chore: update")
+    body = msg_data.get("body", "")
+
+    full_msg = subject
+    if body:
+        full_msg += f"\n\n{body}"
+
+    console.print(Panel(full_msg, title="Commit Message", box=box.ROUNDED, style="green"))
+    console.print()
+
+    if copy_clip:
+        try:
+            subprocess.run(
+                ["pbcopy"] if platform.system() == "Darwin" else ["xclip", "-selection", "clipboard"],
+                input=full_msg, text=True, check=True,
+            )
+            console.print("[green]Copied to clipboard![/]\n")
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            console.print("[yellow]Could not copy to clipboard.[/]\n")
+
+    stats = result.get("stats", {})
+    console.print(f"[dim]Tokens used: {stats.get('total_tokens', 0):,}[/]\n")
+
+
+@ai_review.command("bugs")
+@click.argument("paths", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--target", "-t", default=".", help="Project root.")
+@click.option("--json-output", "-j", is_flag=True, help="Output raw JSON.")
+def ai_bugs(paths: tuple, target: str, json_output: bool):
+    """Detect potential bugs using AI analysis."""
+    cfg = load_config(Path(target))
+    file_paths = [Path(p) for p in paths]
+
+    console.print(f"\n[cyan]AI Review:[/] Bug detection on {len(file_paths)} file(s)...\n")
+
+    result = run_ai_review_sync(file_paths, cfg, ReviewMode.BUG_DETECT)
+
+    if "error" in result:
+        console.print(f"[red]Error:[/] {result['error']}")
+        raise SystemExit(1)
+
+    if json_output:
+        console.print_json(json.dumps(result, indent=2, default=str))
+        return
+
+    results = result.get("results", {})
+    total = 0
+    for filepath, bugs in results.items():
+        if not bugs:
+            continue
+        console.print(f"[bold]{filepath}[/]")
+        for bug in bugs:
+            sev = bug.get("severity", "warning")
+            color = {"error": "red", "warning": "yellow"}.get(sev, "yellow")
+            console.print(f"  [{color}]BUG[/] L{bug.get('line', '?')}: {bug.get('description', '')}")
+            if bug.get("suggested_fix"):
+                console.print(f"       [dim]Fix: {bug['suggested_fix']}[/]")
+            total += 1
+        console.print()
+
+    stats = result.get("stats", {})
+    console.print(f"[dim]Found {total} potential bug(s) | Tokens: {stats.get('total_tokens', 0):,}[/]\n")
+
+
+@ai_review.command("refactor")
+@click.argument("paths", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--target", "-t", default=".", help="Project root.")
+@click.option("--json-output", "-j", is_flag=True, help="Output raw JSON.")
+def ai_refactor(paths: tuple, target: str, json_output: bool):
+    """Suggest refactoring improvements."""
+    cfg = load_config(Path(target))
+    file_paths = [Path(p) for p in paths]
+
+    console.print(f"\n[cyan]AI Review:[/] Refactoring analysis on {len(file_paths)} file(s)...\n")
+
+    result = run_ai_review_sync(file_paths, cfg, ReviewMode.REFACTOR)
+
+    if "error" in result:
+        console.print(f"[red]Error:[/] {result['error']}")
+        raise SystemExit(1)
+
+    if json_output:
+        console.print_json(json.dumps(result, indent=2, default=str))
+        return
+
+    results = result.get("results", {})
+    for filepath, suggestions in results.items():
+        if not suggestions:
+            continue
+        console.print(f"[bold]{filepath}[/]")
+        for i, s in enumerate(suggestions, 1):
+            console.print(f"  [magenta]#{i}[/] L{s.get('line_start', '?')}-{s.get('line_end', '?')}: {s.get('description', '')}")
+            if s.get("refactored_code"):
+                console.print(f"    [dim]Suggested code:[/]")
+                for line in s["refactored_code"].split("\n")[:5]:
+                    console.print(f"    [green]{line}[/]")
+                if s["refactored_code"].count("\n") > 5:
+                    console.print("    [dim]...[/]")
+            console.print()
+
+    stats = result.get("stats", {})
+    console.print(f"[dim]Tokens used: {stats.get('total_tokens', 0):,}[/]\n")
+
+
+@ai_review.command("configure")
+@click.option(
+    "--provider", "-p",
+    type=click.Choice(["openai", "anthropic"]),
+    required=True,
+    help="LLM provider.",
+)
+@click.option("--api-key", "-k", prompt=True, hide_input=True, help="API key.")
+@click.option("--config-file", "-c", default=".devlens.yml", help="Config file path.")
+def ai_configure(provider: str, api_key: str, config_file: str):
+    """Configure AI review API credentials."""
+    config_path = Path(config_file)
+    if configure_api_key(provider, api_key, config_path):
+        console.print(f"\n[green]AI review configured![/]")
+        console.print(f"  Provider: {provider}")
+        console.print(f"  Config:   {config_path}\n")
+    else:
+        console.print(f"\n[red]Failed to save configuration.[/]\n")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
