@@ -121,6 +121,22 @@ def analyze_pr(pr: PRData, detail: str = "medium", config: dict | None = None) -
     """Send PR data to LLM and parse structured review result."""
     cfg = config or {}
     model = cfg.get("model", "gpt-4o")
+
+    # Inject API key from config into environment so backend functions can find it
+    api_key = cfg.get("api_key")
+    if api_key:
+        _ENV_MAP = {
+            "gpt": "OPENAI_API_KEY", "o1": "OPENAI_API_KEY", "o3": "OPENAI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "groq/": "GROQ_API_KEY",
+            "openrouter/": "OPENROUTER_API_KEY",
+        }
+        for prefix, env_var in _ENV_MAP.items():
+            if model.startswith(prefix) and not os.environ.get(env_var):
+                os.environ[env_var] = api_key
+                break
+
     prompt = _build_prompt(pr, detail)
 
     raw = _call_llm(model, prompt)
