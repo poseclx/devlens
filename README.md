@@ -25,7 +25,7 @@ Code reviews are critical but time-consuming. DevLens surfaces what actually mat
 - **Smart Summarization** — Skips trivial changes (formatting, imports), highlights what matters
 - **Context-Aware** — Understands the purpose of the PR from title, description, and linked issues
 - **CI/CD Ready** — Works as a GitHub Action or standalone CLI tool
-- **Multi-Provider** — Supports OpenAI, Anthropic, and Google Gemini out of the box
+- **Multi-Provider** — Supports OpenAI, Anthropic, Google Gemini, Groq (free), Ollama (local), and OpenRouter (100+ models)
 
 ## Installation
 
@@ -109,11 +109,14 @@ Add DevLens to your CI pipeline by copying the workflow files from [`.github/wor
 
 Then go to **Settings > Secrets and variables > Actions** and add the secret for your AI provider:
 
-| Provider | Secret Name | Where to Get It |
-|:---|:---|:---|
-| OpenAI | `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| Anthropic | `ANTHROPIC_API_KEY` | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
-| Google Gemini | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/app/apikey) |
+| Provider | Secret Name | Where to Get It | Cost |
+|:---|:---|:---|:---|
+| OpenAI | `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | Paid |
+| Anthropic | `ANTHROPIC_API_KEY` | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) | Paid |
+| Google Gemini | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/app/apikey) | Free tier |
+| Groq | `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) | **Free** |
+| Ollama | — | [ollama.com](https://ollama.com) (runs locally) | **Free** |
+| OpenRouter | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) | Free models available |
 
 > Add only the one you use — DevLens auto-detects which provider is configured. `GITHUB_TOKEN` is provided automatically by GitHub Actions.
 
@@ -125,6 +128,9 @@ Then go to **Settings > Secrets and variables > Actions** and add the secret for
 | `OPENAI_API_KEY` | OpenAI API key (if using GPT models) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (if using Claude) |
 | `GEMINI_API_KEY` | Google Gemini API key (if using Gemini models) |
+| `GROQ_API_KEY` | Groq API key — **free** at [console.groq.com/keys](https://console.groq.com/keys) |
+| `OPENROUTER_API_KEY` | OpenRouter API key — free models at [openrouter.ai](https://openrouter.ai) |
+| `OLLAMA_HOST` | Ollama server URL (default: `http://localhost:11434`) |
 
 ## Contributing
 
