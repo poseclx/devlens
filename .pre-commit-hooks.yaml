@@ -1,0 +1,26 @@
+# DevLens pre-commit hooks
+# Usage in .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: https://github.com/poseclx/devlens
+#       rev: v0.3.0
+#       hooks:
+#         - id: devlens-scan
+#           stages: [commit]
+#
+- id: devlens-scan
+  name: DevLens Security Scan
+  entry: devlens scan path --staged
+  language: python
+  types: [python, javascript, typescript, go, rust, yaml, json, toml]
+  stages: [commit]
+  pass_filenames: false
+  additional_dependencies: ["devlens>=0.3.0"]
+
+- id: devlens-scan-all
+  name: DevLens Full Security Scan
+  entry: devlens scan path .
+  language: python
+  stages: [push]
+  pass_filenames: false
+  additional_dependencies: ["devlens>=0.3.0"]
