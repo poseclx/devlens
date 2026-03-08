@@ -388,6 +388,7 @@ def main() -> None:
     Commands:\n
       init     Set up your AI provider (run once)\n
       review   Analyze a GitHub Pull Request\n
+      scan     Security scanning (secrets, vulnerabilities)\n
       onboard  Generate an onboarding guide for a repository\n
       docs     Check documentation health\n
       doctor   Diagnose and fix common setup issues\n
@@ -589,6 +590,7 @@ def _static_review(pr) -> ReviewResult:
 )
 @click.option("--output", "-o", default=None, help="Save output to a file.")
 @click.option("--ai", is_flag=True, default=False, help="Enable AI-powered analysis.")
+@click.option("--comment", is_flag=True, default=False, help="Post result as a GitHub PR comment (requires GITHUB_TOKEN).")
 @click.option(
     "--model", "-m", default=None,
     help="LLM model to use: gpt-4o, claude-3-5-sonnet-20241022, gemini-1.5-pro, etc. "
@@ -601,6 +603,7 @@ def review(
     detail: str | None,
     output: str | None,
     ai: bool,
+    comment: bool,
     model: str | None,
 ) -> None:
     """Analyze a Pull Request and surface what actually matters.
@@ -609,10 +612,12 @@ def review(
 
     Use --ai to enable AI analysis. The provider is picked from your saved
     setup (devlens init) or from the --model flag.\n
+    Use --comment to post the result directly as a GitHub PR comment.\n
 
     Examples:\n
       devlens review 42\n
       devlens review 42 --ai\n
+      devlens review 42 --ai --comment\n
       devlens review 42 --ai --model claude-3-5-sonnet-20241022\n
       devlens review 42 --ai --format html --output report.html\n
     """
@@ -662,6 +667,17 @@ def review(
             console.print(f"\n[dim]Saved to {output}[/]")
     else:
         result.print_rich(console)
+
+    # Post as PR comment if requested
+    if comment:
+        from devlens.commenter import post_review_comment
+        try:
+            comment_url = post_review_comment(result, resolved_repo, pr_number)
+            console.print(f"\n[bold green]Comment posted:[/] {comment_url}")
+        except EnvironmentError as exc:
+            console.print(f"\n[bold red]Error:[/] {exc}")
+        except Exception as exc:
+            console.print(f"\n[bold red]Failed to post comment:[/] {exc}")
 
 
 # ── devlens onboard ───────────────────────────────────────────
@@ -819,6 +835,209 @@ def docs_check(
             Path(output).write_text(text)
     else:
         _print_docs_rich(result, console)
+
+
+# ── devlens scan ─────────────────────────────────────────────────────
+
+@main.group()
+def scan() -> None:
+    """Security scanning commands."""
+
+
+@scan.command("pr")
+@click.argument("pr_number", type=int)
+@click.option("--repo", "-r", default=None, help="owner/repo (auto-detects from git remote if omitted)")
+@click.option(
+    "--format", "-f", "output_format",
+    type=click.Choice(["text", "markdown", "json", "html"]),
+    default="text", show_default=True,
+    help="Output format.",
+)
+@click.option("--output", "-o", default=None, help="Save output to a file.")
+@click.option("--ai", is_flag=True, default=False, help="Enable AI-powered deep analysis.")
+@click.option("--comment", is_flag=True, default=False, help="Post result as a GitHub PR comment.")
+@click.option(
+    "--model", "-m", default=None,
+    help="LLM model for AI analysis.",
+)
+def scan_pr_cmd(
+    pr_number: int,
+    repo: str | None,
+    output_format: str,
+    output: str | None,
+    ai: bool,
+    comment: bool,
+    model: str | None,
+) -> None:
+    """Scan a Pull Request for security vulnerabilities.
+
+    Detects hardcoded secrets, SQL injection, command injection,
+    unsafe deserialization, and 20+ other security patterns.
+
+    Use --ai for deeper AI-powered analysis beyond regex patterns.
+    Use --comment to post the security report as a PR comment.\n
+
+    Examples:\n
+      devlens scan pr 42\n
+      devlens scan pr 42 --ai\n
+      devlens scan pr 42 --ai --comment\n
+      devlens scan pr 42 --format json --output security.json\n
+    """
+    from devlens.security import scan_pr, Severity
+    from devlens.config import get_security_config
+
+    cfg = load_config()
+    sec_cfg = get_security_config(cfg)
+    resolved_repo = repo or cfg.get("repo") or _detect_repo()
+    if not resolved_repo:
+        console.print("[bold red]Error:[/] Could not detect repo. Run inside a git repo or pass --repo owner/name.")
+        sys.exit(1)
+
+    resolved_model: str | None = None
+    if ai:
+        resolved_model, _ = _resolve_model(model, cfg)
+
+    with console.status(f"[bold cyan]Fetching PR #{pr_number} from {resolved_repo}..."):
+        pr_data = fetch_pr(resolved_repo, pr_number)
+
+    status_msg = f"[bold cyan]Security scanning with AI ({resolved_model})..." if ai else "[bold cyan]Running security scan..."
+    with console.status(status_msg):
+        custom_rules = sec_cfg.get("custom_rules", [])
+        # Convert severity strings to Severity enum for custom rules
+        for rule in custom_rules:
+            if isinstance(rule.get("severity"), str):
+                rule["severity"] = Severity(rule["severity"])
+
+        result = scan_pr(
+            pr_data,
+            use_ai=ai,
+            model=resolved_model or "gpt-4o",
+            custom_rules=custom_rules if custom_rules else None,
+        )
+
+    # Display results
+    score = result.score
+    grade = result.grade
+    color = "green" if score >= 90 else "yellow" if score >= 60 else "red"
+
+    if output_format == "json":
+        text = json.dumps(result.to_dict(), indent=2)
+        _emit(text, output, console)
+    elif output_format == "markdown":
+        text = result.to_markdown()
+        console.print(Markdown(text))
+        if output:
+            Path(output).write_text(text)
+            console.print(f"\n[dim]Saved to {output}[/]")
+    elif output_format == "html":
+        # Reuse markdown for now, HTML template can be added later
+        text = result.to_markdown()
+        if output:
+            Path(output).write_text(text)
+            console.print(f"[bold green]Report saved:[/] {output}")
+        else:
+            console.print(Markdown(text))
+    else:
+        # Rich text output
+        console.print()
+        console.print(
+            Panel(
+                f"[bold {color}]{score}/100[/] (Grade: [bold]{grade}[/])",
+                title=f"[bold]Security Score — PR #{pr_number}[/]",
+                border_style=color,
+            )
+        )
+        console.print(f"\n[dim]Files scanned: {result.files_scanned}/{result.total_files}[/]\n")
+
+        if result.findings:
+            from rich.table import Table
+            table = Table(title=f"Findings ({len(result.findings)})", box=box.SIMPLE_HEAVY, show_lines=True)
+            table.add_column("Severity", justify="center", no_wrap=True)
+            table.add_column("Rule", style="dim", no_wrap=True)
+            table.add_column("File", style="cyan", no_wrap=True)
+            table.add_column("Description")
+
+            for f in sorted(result.findings, key=lambda x: ["critical", "high", "medium", "low", "info"].index(x.severity.value)):
+                sev = f.severity.value
+                sev_color = {"critical": "red bold", "high": "red", "medium": "yellow", "low": "blue"}.get(sev, "white")
+                loc = f.file + (f":{f.line}" if f.line else "")
+                table.add_row(f"[{sev_color}]{sev.upper()}[/{sev_color}]", f.rule_id, loc, f.title)
+
+            console.print(table)
+        else:
+            console.print("[bold green]No security issues found![/]")
+
+        if result.ai_summary:
+            console.print()
+            console.print(Panel(result.ai_summary, title="[bold]AI Security Assessment[/]", border_style="blue"))
+
+        console.print()
+
+    # Post as PR comment if requested
+    if comment:
+        from devlens.commenter import post_security_comment
+        try:
+            comment_url = post_security_comment(result, resolved_repo, pr_number)
+            console.print(f"[bold green]Comment posted:[/] {comment_url}")
+        except EnvironmentError as exc:
+            console.print(f"[bold red]Error:[/] {exc}")
+        except Exception as exc:
+            console.print(f"[bold red]Failed to post comment:[/] {exc}")
+
+    # Check fail_on threshold
+    fail_on = sec_cfg.get("fail_on", "high")
+    threshold_order = ["low", "medium", "high", "critical"]
+    if fail_on in threshold_order:
+        threshold_idx = threshold_order.index(fail_on)
+        for f in result.findings:
+            if f.severity.value in threshold_order[threshold_idx:]:
+                console.print(f"\n[bold red]FAILED:[/] Found {f.severity.value} severity issue (threshold: {fail_on})")
+                sys.exit(1)
+
+
+@scan.command("path")
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option(
+    "--format", "-f", "output_format",
+    type=click.Choice(["text", "json"]),
+    default="text", show_default=True,
+)
+@click.option("--output", "-o", default=None, help="Save output to a file.")
+def scan_path_cmd(target: str, output_format: str, output: str | None) -> None:
+    """Scan local files or directories for secrets and vulnerabilities.
+
+    TARGET defaults to the current directory.
+
+    Examples:\n
+      devlens scan path\n
+      devlens scan path ./src\n
+      devlens scan path . --format json --output secrets.json\n
+    """
+    from devlens.security import scan_path
+
+    with console.status(f"[bold cyan]Scanning {target}..."):
+        findings = scan_path(target)
+
+    if output_format == "json":
+        data = [f.to_dict() for f in findings]
+        text = json.dumps(data, indent=2)
+        _emit(text, output, console)
+    else:
+        console.print()
+        if not findings:
+            console.print(Panel("[bold green]No security issues found![/]", border_style="green"))
+        else:
+            console.print(f"[bold red]Found {len(findings)} issue(s):[/]\n")
+            for f in findings:
+                sev = f.severity.value.upper()
+                sev_color = {"CRITICAL": "red bold", "HIGH": "red", "MEDIUM": "yellow", "LOW": "blue"}.get(sev, "white")
+                loc = f.file + (f":{f.line}" if f.line else "")
+                console.print(f"  [{sev_color}]{sev}[/{sev_color}] {f.title}")
+                console.print(f"    [cyan]{loc}[/] — {f.description}")
+                if f.suggestion:
+                    console.print(f"    [dim]Fix: {f.suggestion}[/]")
+                console.print()
+    console.print()
 
 
 # ── Helpers ───────────────────────────────────────────────────
