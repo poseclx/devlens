@@ -18,6 +18,7 @@ from rich import box
 from devlens.github import fetch_pr
 from devlens.analyzer import analyze_pr, ReviewResult
 from devlens.config import load_config
+from devlens.ignore import load_ignore_patterns
 
 console = Console()
 
@@ -381,7 +382,7 @@ def _run_init_flow() -> None:
 # ── main group ────────────────────────────────────────────────
 
 @click.group()
-@click.version_option(version="0.1.0", prog_name="devlens")
+@click.version_option(version="0.3.0", prog_name="devlens")
 def main() -> None:
     """DevLens — AI-powered developer assistant.
 
@@ -591,6 +592,7 @@ def _static_review(pr) -> ReviewResult:
 @click.option("--output", "-o", default=None, help="Save output to a file.")
 @click.option("--ai", is_flag=True, default=False, help="Enable AI-powered analysis.")
 @click.option("--comment", is_flag=True, default=False, help="Post result as a GitHub PR comment (requires GITHUB_TOKEN).")
+@click.option("--summary", is_flag=True, default=False, help="Show a concise 3-5 sentence summary of the PR before the full review.")
 @click.option(
     "--model", "-m", default=None,
     help="LLM model to use: gpt-4o, claude-3-5-sonnet-20241022, gemini-1.5-pro, etc. "
@@ -604,6 +606,7 @@ def review(
     output: str | None,
     ai: bool,
     comment: bool,
+    summary: bool,
     model: str | None,
 ) -> None:
     """Analyze a Pull Request and surface what actually matters.
@@ -650,11 +653,27 @@ def review(
         else:
             result = _static_review(pr_data)
 
+    # Show PR summary if requested
+    if summary:
+        from devlens.summarizer import summarize_pr
+        with console.status("[bold cyan]Generating PR summary..."):
+            pr_summary = summarize_pr(pr_data, use_ai=ai, model=resolved_model or "gpt-4o")
+        console.print()
+        console.print(Panel(
+            Markdown(pr_summary.to_markdown()),
+            title="[bold]PR Summary[/]",
+            border_style="blue",
+        ))
+        console.print()
+
     if output_format == "html":
-        from devlens.reporter import render_pr_html, save_html
-        html = render_pr_html(result, repo=resolved_repo, pr_number=pr_number)
+        from devlens.reporter import ReportData, export_report
+        report_data = ReportData(
+            pr_number=pr_number, pr_title=pr_data.title,
+            repo=resolved_repo, review=result,
+        )
         out = output or f"devlens-pr-{pr_number}.html"
-        save_html(html, out)
+        export_report(report_data, out, fmt="html")
         console.print(f"[bold green]HTML report saved:[/] {out}")
     elif output_format == "json":
         text = json.dumps(result.to_dict(), indent=2)
@@ -930,13 +949,14 @@ def scan_pr_cmd(
             Path(output).write_text(text)
             console.print(f"\n[dim]Saved to {output}[/]")
     elif output_format == "html":
-        # Reuse markdown for now, HTML template can be added later
-        text = result.to_markdown()
-        if output:
-            Path(output).write_text(text)
-            console.print(f"[bold green]Report saved:[/] {output}")
-        else:
-            console.print(Markdown(text))
+        from devlens.reporter import ReportData, export_report
+        report_data = ReportData(
+            pr_number=pr_number, pr_title=pr_data.title,
+            repo=resolved_repo, scan_result=result,
+        )
+        out = output or f"devlens-scan-{pr_number}.html"
+        export_report(report_data, out, fmt="html")
+        console.print(f"[bold green]HTML report saved:[/] {out}")
     else:
         # Rich text output
         console.print()
@@ -1003,7 +1023,8 @@ def scan_pr_cmd(
     default="text", show_default=True,
 )
 @click.option("--output", "-o", default=None, help="Save output to a file.")
-def scan_path_cmd(target: str, output_format: str, output: str | None) -> None:
+@click.option("--staged", is_flag=True, default=False, help="Only scan git staged files (for pre-commit hooks).")
+def scan_path_cmd(target: str, output_format: str, output: str | None, staged: bool) -> None:
     """Scan local files or directories for secrets and vulnerabilities.
 
     TARGET defaults to the current directory.
@@ -1014,9 +1035,28 @@ def scan_path_cmd(target: str, output_format: str, output: str | None) -> None:
       devlens scan path . --format json --output secrets.json\n
     """
     from devlens.security import scan_path
+    from devlens.config import get_security_config
+
+    cfg = load_config()
+    sec_cfg = get_security_config(cfg)
+    ignore_filter = load_ignore_patterns()
+
+    if staged:
+        from devlens.hooks import get_staged_files
+        staged_files = get_staged_files()
+        if not staged_files:
+            console.print("[bold green]No staged files to scan.[/]")
+            return
+        staged_files = ignore_filter.filter_paths(staged_files)
+        console.print(f"[dim]Scanning {len(staged_files)} staged file(s)...[/]")
 
     with console.status(f"[bold cyan]Scanning {target}..."):
-        findings = scan_path(target)
+        findings = scan_path(target, ignore_patterns=sec_cfg.get("ignore_rules") or None)
+
+    # If --staged, filter findings to only staged files
+    if staged:
+        staged_set = set(staged_files)
+        findings = [f for f in findings if f.file in staged_set]
 
     if output_format == "json":
         data = [f.to_dict() for f in findings]
@@ -1048,6 +1088,51 @@ def _emit(text: str, output: str | None, console: Console) -> None:
         console.print(f"[dim]Saved to {output}[/]")
     else:
         click.echo(text)
+
+
+# ── devlens hook ─────────────────────────────────────────────────────
+
+@main.group()
+def hook() -> None:
+    """Manage git pre-commit hooks."""
+
+
+@hook.command("install")
+@click.option("--force", is_flag=True, default=False, help="Overwrite existing pre-commit hook.")
+def hook_install(force: bool) -> None:
+    """Install DevLens as a git pre-commit hook.
+
+    This creates a .git/hooks/pre-commit script that runs
+    'devlens scan path --staged' before every commit.
+
+    Examples:\n
+      devlens hook install\n
+      devlens hook install --force\n
+    """
+    from devlens.hooks import install_hook
+    success = install_hook(force=force)
+    if not success:
+        sys.exit(1)
+
+
+@hook.command("uninstall")
+def hook_uninstall() -> None:
+    """Remove the DevLens pre-commit hook."""
+    from devlens.hooks import uninstall_hook
+    success = uninstall_hook()
+    if not success:
+        sys.exit(1)
+
+
+@hook.command("run")
+def hook_run() -> None:
+    """Manually run the pre-commit hook check.
+
+    This is the same check that runs automatically before commits.
+    """
+    from devlens.hooks import run_hook
+    exit_code = run_hook()
+    sys.exit(exit_code)
 
 
 def _print_docs_rich(result, console: Console) -> None:
