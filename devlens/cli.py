@@ -17,7 +17,7 @@ from rich import box
 
 from devlens.github import fetch_pr
 from devlens.analyzer import analyze_pr, ReviewResult
-from devlens.config import load_config
+from devlens.config import load_config, get_cache_config, get_rules_config
 from devlens.ignore import load_ignore_patterns
 
 console = Console()
@@ -382,7 +382,7 @@ def _run_init_flow() -> None:
 # ── main group ────────────────────────────────────────────────
 
 @click.group()
-@click.version_option(version="0.3.0", prog_name="devlens")
+@click.version_option(version="0.5.0", prog_name="devlens")
 def main() -> None:
     """DevLens — AI-powered developer assistant.
 
@@ -875,10 +875,12 @@ def scan() -> None:
 @click.option("--output", "-o", default=None, help="Save output to a file.")
 @click.option("--ai", is_flag=True, default=False, help="Enable AI-powered deep analysis.")
 @click.option("--comment", is_flag=True, default=False, help="Post result as a GitHub PR comment.")
+@click.option("--fix", is_flag=True, default=False, help="Generate fix suggestions for findings.")
 @click.option(
     "--model", "-m", default=None,
     help="LLM model for AI analysis.",
 )
+@click.option("--rules", is_flag=True, default=False, help="Run custom rules against PR files.")
 def scan_pr_cmd(
     pr_number: int,
     repo: str | None,
@@ -886,7 +888,9 @@ def scan_pr_cmd(
     output: str | None,
     ai: bool,
     comment: bool,
+    fix: bool,
     model: str | None,
+    rules: bool,
 ) -> None:
     """Scan a Pull Request for security vulnerabilities.
 
@@ -992,6 +996,27 @@ def scan_pr_cmd(
             console.print(Panel(result.ai_summary, title="[bold]AI Security Assessment[/]", border_style="blue"))
 
         console.print()
+
+    # Generate fix suggestions if requested
+    if fix:
+        from devlens.fixer import suggest_fixes, format_fixes_markdown
+        with console.status("[bold cyan]Generating fix suggestions..."):
+            file_contents = {}
+            for f in pr_data.files:
+                if f.get("patch"):
+                    # Reconstruct content from patch (added lines only)
+                    added = [l[1:] for l in f["patch"].split("\n") if l.startswith("+") and not l.startswith("+++")]
+                    file_contents[f["filename"]] = "\n".join(added)
+            fixes = suggest_fixes(result.findings, file_contents, use_ai=ai, model=resolved_model or "gpt-4o")
+        if fixes:
+            console.print()
+            console.print(Panel(
+                Markdown(format_fixes_markdown(fixes)),
+                title=f"[bold]Fix Suggestions ({len(fixes)})[/]",
+                border_style="green",
+            ))
+        else:
+            console.print("\n[dim]No automatic fix suggestions available for these findings.[/]")
 
     # Post as PR comment if requested
     if comment:
@@ -1135,6 +1160,296 @@ def hook_run() -> None:
     sys.exit(exit_code)
 
 
+
+# ── devlens complexity ───────────────────────────────────────────────
+
+@main.command()
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option(
+    "--format", "-f", "output_format",
+    type=click.Choice(["text", "markdown", "json"]),
+    default="text", show_default=True,
+)
+@click.option("--output", "-o", default=None, help="Save output to a file.")
+@click.option("--threshold", "-t", type=int, default=10, help="Cyclomatic complexity warning threshold.")
+@click.option("--lang", default=None, type=click.Choice(["python", "javascript", "typescript", "java", "go", "rust", "auto"]), help="Language filter (default: auto-detect).")
+@click.option("--no-cache", is_flag=True, default=False, help="Skip cache, force fresh analysis.")
+def complexity(target: str, output_format: str, output: str | None, threshold: int, lang: str | None, no_cache: bool) -> None:
+    """Analyze code complexity metrics.
+
+    Measures cyclomatic complexity, function length, nesting depth,
+    and cognitive complexity for Python files.
+
+    TARGET defaults to the current directory.
+
+    Examples:\n
+      devlens complexity\n
+      devlens complexity ./src\n
+      devlens complexity --threshold 15 --format json\n
+    """
+    from devlens.complexity import analyze_path
+    from devlens.languages import analyze_file_multilang, ALL_EXTENSIONS, SUPPORTED_EXTENSIONS
+    from devlens.cache import CacheManager
+
+    cfg = load_config()
+    cache_cfg = get_cache_config(cfg)
+
+    cache = None
+    if cache_cfg.get("enabled", True) and not no_cache:
+        cache = CacheManager(
+            root=target if Path(target).is_dir() else ".",
+            cache_dir=cache_cfg.get("dir", ".devlens-cache"),
+            ttl_days=cache_cfg.get("ttl_days", 7),
+        )
+
+    # Determine extensions based on --lang
+    if lang and lang != "auto":
+        ext_map = {"python": (".py",), "javascript": (".js", ".jsx", ".mjs", ".cjs"),
+                   "typescript": (".ts", ".tsx", ".mts"), "java": (".java",),
+                   "go": (".go",), "rust": (".rs",)}
+        extensions = ext_map.get(lang, (".py",))
+    else:
+        extensions = ALL_EXTENSIONS
+
+    with console.status(f"[bold cyan]Analyzing complexity in {target}..."):
+        report = analyze_path(target, extensions=extensions)
+
+    if cache:
+        cache.save()
+
+    if output_format == "json":
+        text = json.dumps(report.to_dict(), indent=2)
+        _emit(text, output, console)
+    elif output_format == "markdown":
+        text = report.to_markdown()
+        console.print(Markdown(text))
+        if output:
+            Path(output).write_text(text)
+            console.print(f"\n[dim]Saved to {output}[/]")
+    else:
+        # Rich text output
+        score = report.score
+        grade = report.grade
+        color = "green" if score >= 80 else "yellow" if score >= 50 else "red"
+
+        console.print()
+        console.print(
+            Panel(
+                f"[bold {color}]{score}/100[/] (Grade: [bold]{grade}[/])",
+                title="[bold]Complexity Score[/]",
+                border_style=color,
+            )
+        )
+        console.print(
+            f"\n[dim]Functions: {report.total_functions} | "
+            f"Avg Complexity: {report.avg_cyclomatic:.1f} | "
+            f"High Risk: {report.high_risk_count} | "
+            f"Medium Risk: {report.medium_risk_count}[/]\n"
+        )
+
+        # Show problematic functions
+        all_funcs = [fn for f in report.files for fn in f.functions]
+        risky = [fn for fn in all_funcs if fn.cyclomatic >= threshold]
+
+        if risky:
+            table = Table(title=f"Functions Above Threshold ({threshold})", box=box.SIMPLE_HEAVY, show_lines=True)
+            table.add_column("Risk", justify="center", no_wrap=True)
+            table.add_column("Function", style="cyan")
+            table.add_column("File", style="dim")
+            table.add_column("Cyclomatic", justify="right")
+            table.add_column("Length", justify="right")
+            table.add_column("Nesting", justify="right")
+            table.add_column("Cognitive", justify="right")
+
+            for fn in sorted(risky, key=lambda x: x.cyclomatic, reverse=True)[:20]:
+                risk_color = {"high": "red bold", "medium": "yellow"}.get(fn.risk, "green")
+                table.add_row(
+                    f"[{risk_color}]{fn.risk.upper()}[/{risk_color}]",
+                    fn.name,
+                    f"{fn.file}:{fn.line}",
+                    str(fn.cyclomatic),
+                    str(fn.length),
+                    str(fn.max_nesting),
+                    str(fn.cognitive),
+                )
+            console.print(table)
+        else:
+            console.print("[bold green]All functions are below the complexity threshold![/]")
+        console.print()
+
+
+# ── devlens audit ────────────────────────────────────────────────────
+
+@main.command()
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option(
+    "--format", "-f", "output_format",
+    type=click.Choice(["text", "markdown", "json"]),
+    default="text", show_default=True,
+)
+@click.option("--output", "-o", default=None, help="Save output to a file.")
+@click.option("--no-cache", is_flag=True, default=False, help="Skip cache, force fresh analysis.")
+def audit(target: str, output_format: str, output: str | None, no_cache: bool) -> None:
+    """Audit project dependencies for known vulnerabilities.
+
+    Scans requirements.txt, pyproject.toml, package.json, and go.mod
+    against the OSV.dev vulnerability database.
+
+    TARGET defaults to the current directory.
+
+    Examples:\n
+      devlens audit\n
+      devlens audit ./my-project\n
+      devlens audit --format json --output vulns.json\n
+    """
+    from devlens.depaudit import audit_dependencies
+
+    with console.status(f"[bold cyan]Auditing dependencies in {target}..."):
+        report = audit_dependencies(target)
+
+    if not report.dependencies:
+        console.print("\n[yellow]No dependency files found (requirements.txt, pyproject.toml, package.json, go.mod).[/]\n")
+        return
+
+    if output_format == "json":
+        text = json.dumps(report.to_dict(), indent=2)
+        _emit(text, output, console)
+    elif output_format == "markdown":
+        text = report.to_markdown()
+        console.print(Markdown(text))
+        if output:
+            Path(output).write_text(text)
+            console.print(f"\n[dim]Saved to {output}[/]")
+    else:
+        # Rich text output
+        score = report.score
+        grade = report.grade
+        color = "green" if score >= 90 else "yellow" if score >= 60 else "red"
+
+        console.print()
+        console.print(
+            Panel(
+                f"[bold {color}]{score}/100[/] (Grade: [bold]{grade}[/])",
+                title="[bold]Dependency Audit[/]",
+                border_style=color,
+            )
+        )
+        console.print(
+            f"\n[dim]Dependencies: {len(report.dependencies)} | "
+            f"Vulnerabilities: {len(report.vulnerabilities)} "
+            f"(Critical: {report.critical_count}, High: {report.high_count}, "
+            f"Medium: {report.medium_count}, Low: {report.low_count})[/]\n"
+        )
+
+        if report.vulnerabilities:
+            table = Table(title=f"Vulnerabilities ({len(report.vulnerabilities)})", box=box.SIMPLE_HEAVY, show_lines=True)
+            table.add_column("Severity", justify="center", no_wrap=True)
+            table.add_column("Package", style="cyan", no_wrap=True)
+            table.add_column("Version", style="dim")
+            table.add_column("ID", no_wrap=True)
+            table.add_column("Summary")
+            table.add_column("Fix", style="green")
+
+            for v in sorted(report.vulnerabilities,
+                          key=lambda x: ["critical", "high", "medium", "low"].index(x.severity)):
+                sev_color = {"critical": "red bold", "high": "red", "medium": "yellow", "low": "blue"}.get(v.severity, "white")
+                fix = v.fixed_in or "—"
+                table.add_row(
+                    f"[{sev_color}]{v.severity.upper()}[/{sev_color}]",
+                    v.package,
+                    v.version,
+                    v.id,
+                    v.summary[:60],
+                    fix,
+                )
+            console.print(table)
+        else:
+            console.print("[bold green]No known vulnerabilities found![/]")
+        console.print()
+
+
+# ── devlens fix ──────────────────────────────────────────────────────
+
+@main.command("fix")
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option("--ai", is_flag=True, default=False, help="Use AI for intelligent fix generation.")
+@click.option(
+    "--model", "-m", default=None,
+    help="LLM model for AI-powered fixes.",
+)
+@click.option(
+    "--format", "-f", "output_format",
+    type=click.Choice(["text", "markdown", "json"]),
+    default="text", show_default=True,
+)
+@click.option("--output", "-o", default=None, help="Save fixes to a file.")
+@click.option("--no-cache", is_flag=True, default=False, help="Skip cache, force fresh analysis.")
+def fix_cmd(target: str, ai: bool, model: str | None, output_format: str, output: str | None, no_cache: bool) -> None:
+    """Scan for security issues and generate fix suggestions.
+
+    Combines security scanning with automated fix generation.
+    Use --ai for LLM-powered intelligent fixes.
+
+    Examples:\n
+      devlens fix\n
+      devlens fix ./src --ai\n
+      devlens fix . --format json --output fixes.json\n
+    """
+    from devlens.security import scan_path
+    from devlens.fixer import suggest_fixes, format_fixes_markdown, format_fixes_json
+
+    cfg = load_config()
+    resolved_model: str | None = None
+    if ai:
+        resolved_model, _ = _resolve_model(model, cfg)
+
+    with console.status(f"[bold cyan]Scanning {target} for issues..."):
+        findings = scan_path(target)
+
+    if not findings:
+        console.print("\n[bold green]No security issues found — nothing to fix![/]\n")
+        return
+
+    console.print(f"\n[dim]Found {len(findings)} issue(s). Generating fixes...[/]")
+
+    # Read file contents for context
+    from pathlib import Path as P
+    root = P(target)
+    file_contents = {}
+    for f in findings:
+        fp = root / f.file if not f.file.startswith("/") else P(f.file)
+        if fp.exists() and fp.stat().st_size < 500_000:
+            try:
+                file_contents[f.file] = fp.read_text(errors="ignore")
+            except Exception:
+                pass
+
+    with console.status("[bold cyan]Generating fix suggestions..."):
+        fixes = suggest_fixes(findings, file_contents, use_ai=ai, model=resolved_model or "gpt-4o")
+
+    if output_format == "json":
+        text = format_fixes_json(fixes)
+        _emit(text, output, console)
+    elif output_format == "markdown":
+        text = format_fixes_markdown(fixes)
+        console.print(Markdown(text))
+        if output:
+            Path(output).write_text(text)
+            console.print(f"\n[dim]Saved to {output}[/]")
+    else:
+        if not fixes:
+            console.print("[yellow]No automatic fix suggestions available for these findings.[/]\n")
+            return
+
+        for i, fix in enumerate(fixes, 1):
+            conf_color = {"high": "green", "medium": "yellow", "low": "red"}.get(fix.confidence, "white")
+            console.print(f"\n[bold]{i}. {fix.title}[/] [{conf_color}]({fix.confidence} confidence)[/{conf_color}]")
+            console.print(f"   [dim]File: {fix.file} | Rule: {fix.finding_id}[/]")
+            console.print(f"   {fix.explanation}")
+            console.print(f"\n   ```diff\n{fix.diff}\n   ```")
+        console.print()
+
+
 def _print_docs_rich(result, console: Console) -> None:
     score = result.health_score
     color = "green" if score >= 80 else "yellow" if score >= 50 else "red"
@@ -1207,6 +1522,164 @@ def _detect_repo() -> str | None:
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     return None
+
+
+
+# ── devlens cache ────────────────────────────────────────────────────
+
+@main.group("cache")
+def cache_group() -> None:
+    """Manage the analysis cache."""
+
+
+@cache_group.command("clear")
+def cache_clear_cmd() -> None:
+    """Clear all cached analysis results.
+
+    Removes the .devlens-cache directory and all cached data.
+
+    Examples:\n
+      devlens cache clear\n
+    """
+    from devlens.cache import CacheManager
+
+    cfg = load_config()
+    cache_cfg = get_cache_config(cfg)
+    cache = CacheManager(
+        cache_dir=cache_cfg.get("dir", ".devlens-cache"),
+        ttl_days=cache_cfg.get("ttl_days", 7),
+    )
+    count = cache.clear()
+    console.print(f"\n[bold green]Cache cleared![/] Removed {count} cached entries.\n")
+
+
+@cache_group.command("stats")
+def cache_stats_cmd() -> None:
+    """Show cache statistics.
+
+    Displays cached entries, size, and breakdown by analyzer.
+
+    Examples:\n
+      devlens cache stats\n
+    """
+    from devlens.cache import CacheManager
+
+    cfg = load_config()
+    cache_cfg = get_cache_config(cfg)
+    cache = CacheManager(
+        cache_dir=cache_cfg.get("dir", ".devlens-cache"),
+        ttl_days=cache_cfg.get("ttl_days", 7),
+    )
+    stats = cache.stats()
+
+    console.print()
+    if stats.total_entries == 0:
+        console.print("[dim]Cache is empty. Run a scan to populate it.[/]\n")
+        return
+
+    table = Table(title="Cache Statistics", box=box.SIMPLE_HEAVY)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+
+    table.add_row("Total entries", str(stats.total_entries))
+    table.add_row("Valid entries", f"[green]{stats.valid_entries}[/]")
+    table.add_row("Expired entries", f"[yellow]{stats.expired_entries}[/]")
+    table.add_row("Size on disk", stats.to_dict()["size_human"])
+
+    console.print(table)
+
+    if stats.analyzers:
+        console.print("\n[bold]By Analyzer:[/]")
+        for analyzer, count in sorted(stats.analyzers.items()):
+            console.print(f"  {analyzer}: {count} entries")
+    console.print()
+
+
+# ── devlens rules ────────────────────────────────────────────────────
+
+@main.group("rules")
+def rules_group() -> None:
+    """Manage custom analysis rules."""
+
+
+@rules_group.command("list")
+def rules_list_cmd() -> None:
+    """List all active rules (built-in and custom).
+
+    Shows rule IDs, types, severity, and enabled status.
+
+    Examples:\n
+      devlens rules list\n
+    """
+    from devlens.rules import RuleEngine
+
+    cfg = load_config()
+    rules_cfg = get_rules_config(cfg)
+    engine = RuleEngine.from_config(cfg)
+    rules = engine.list_rules()
+
+    console.print()
+    if not rules:
+        console.print("[dim]No rules configured. Add rules in .devlens.yml or .devlens-rules.yml[/]\n")
+        return
+
+    table = Table(title=f"Active Rules ({len(rules)})", box=box.SIMPLE_HEAVY, show_lines=True)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Type", justify="center")
+    table.add_column("Severity", justify="center")
+    table.add_column("Enabled", justify="center")
+
+    for rule in rules:
+        sev = rule["severity"]
+        sev_color = {"critical": "red bold", "high": "red", "medium": "yellow", "low": "blue", "info": "dim"}.get(sev, "white")
+        enabled = "[green]Yes[/]" if rule["enabled"] else "[red]No[/]"
+        table.add_row(
+            rule["id"],
+            rule["title"],
+            rule["type"],
+            f"[{sev_color}]{sev.upper()}[/{sev_color}]",
+            enabled,
+        )
+    console.print(table)
+    console.print()
+
+
+@rules_group.command("validate")
+@click.argument("rule_file", default=".devlens-rules.yml", type=click.Path())
+def rules_validate_cmd(rule_file: str) -> None:
+    """Validate a rules file for errors.
+
+    Checks rule definitions for missing fields, invalid regex patterns,
+    unknown metrics, and duplicate IDs.
+
+    Examples:\n
+      devlens rules validate\n
+      devlens rules validate my-rules.yml\n
+    """
+    from devlens.rules import RuleEngine
+
+    cfg = load_config()
+    engine = RuleEngine.from_config(cfg)
+
+    # Also load from specified file if it exists
+    rule_path = Path(rule_file)
+    if rule_path.exists():
+        file_engine = RuleEngine.from_file(rule_file)
+        engine.rules.extend(file_engine.rules)
+        console.print(f"\n[dim]Loaded rules from {rule_file}[/]")
+
+    errors = engine.validate()
+
+    console.print()
+    if not errors:
+        console.print(f"[bold green]All {len(engine.rules)} rules are valid![/]\n")
+    else:
+        console.print(f"[bold red]Found {len(errors)} validation error(s):[/]\n")
+        for err in errors:
+            console.print(f"  [red]Rule '{err.rule_id}'[/] -> field '{err.field}': {err.message}")
+        console.print()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
