@@ -134,6 +134,20 @@ DEFAULT_CONFIG: dict = {
         "auto_discover": True,
         "fail_on_error": False,
     },
+    "lsp": {
+        "enabled": True,
+        "mode": "stdio",
+        "host": "127.0.0.1",
+        "port": 2087,
+        "lint_on_save": True,
+        "lint_on_open": True,
+        "lint_on_change": False,
+        "debounce_ms": 500,
+        "show_code_lens": True,
+        "max_file_size": 500000,
+        "severity_filter": "low",
+        "log_level": "info",
+    },
     "ai_review": {
         "enabled": True,
         "provider": "openai",
@@ -215,6 +229,11 @@ def get_scoreboard_config(cfg: dict) -> dict:
 def get_plugin_config(cfg: dict) -> dict:
     """Extract plugins section with defaults applied."""
     return _deep_merge(DEFAULT_CONFIG["plugins"], cfg.get("plugins", {}))
+
+
+def get_lsp_config(cfg: dict) -> dict:
+    """Extract lsp section with defaults applied."""
+    return _deep_merge(DEFAULT_CONFIG["lsp"], cfg.get("lsp", {}))
 
 
 def get_ai_review_config(cfg: dict) -> dict:
