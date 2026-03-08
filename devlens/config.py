@@ -127,6 +127,32 @@ DEFAULT_CONFIG: dict = {
         "auto_record": False,
         "output": "devlens-scoreboard.html",
     },
+    "plugins": {
+        "enabled": True,
+        "enabled_plugins": [],
+        "plugin_dir": "",
+        "auto_discover": True,
+        "fail_on_error": False,
+    },
+    "ai_review": {
+        "enabled": True,
+        "provider": "openai",
+        "model": "",
+        "api_key": "",
+        "api_base_url": "",
+        "max_tokens": 4096,
+        "temperature": 0.3,
+        "timeout": 60.0,
+        "max_retries": 3,
+        "rate_limit_rpm": 60,
+        "rate_limit_tpm": 100000,
+        "cache_enabled": True,
+        "cache_dir": ".devlens-cache/ai",
+        "cache_ttl": 86400,
+        "max_file_size": 50000,
+        "context_lines": 5,
+        "languages": [],
+    },
 }
 
 CONFIG_FILENAMES = [".devlens.yml", ".devlens.yaml", "devlens.yml"]
@@ -184,3 +210,13 @@ def get_dashboard_config(cfg: dict) -> dict:
 def get_scoreboard_config(cfg: dict) -> dict:
     """Extract scoreboard section with defaults applied."""
     return _deep_merge(DEFAULT_CONFIG["scoreboard"], cfg.get("scoreboard", {}))
+
+
+def get_plugin_config(cfg: dict) -> dict:
+    """Extract plugins section with defaults applied."""
+    return _deep_merge(DEFAULT_CONFIG["plugins"], cfg.get("plugins", {}))
+
+
+def get_ai_review_config(cfg: dict) -> dict:
+    """Extract ai_review section with defaults applied."""
+    return _deep_merge(DEFAULT_CONFIG["ai_review"], cfg.get("ai_review", {}))
