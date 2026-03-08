@@ -118,8 +118,11 @@ def _resolve_model(model_flag: str | None, cfg: dict) -> tuple[str, str]:
         )
 
     saved = _load_setup()
-    model = cfg.get("model") or saved.get("model")
-    provider = cfg.get("provider") or saved.get("provider")
+    # Saved setup (from `devlens init`) takes priority over project defaults
+    # because project config has a hardcoded default model ("gpt-4o") that
+    # would always shadow the user's chosen provider.
+    model = saved.get("model") or cfg.get("model")
+    provider = saved.get("provider") or cfg.get("provider")
 
     if model and provider:
         pinfo = PROVIDERS.get(provider, {})
