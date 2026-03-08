@@ -1,0 +1,233 @@
+{
+  "name": "devlens",
+  "displayName": "DevLens",
+  "description": "AI-powered code review, security scanning, complexity analysis, and more -- right in your editor.",
+  "version": "0.8.0",
+  "publisher": "devlens",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/poseclx/devlens"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "code review",
+    "security",
+    "linter",
+    "complexity",
+    "ai",
+    "python",
+    "javascript",
+    "typescript"
+  ],
+  "icon": "images/devlens-icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescriptreact",
+    "onLanguage:java",
+    "onLanguage:go",
+    "onLanguage:rust",
+    "onLanguage:ruby",
+    "onLanguage:php",
+    "onLanguage:c",
+    "onLanguage:cpp",
+    "onLanguage:csharp"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devlens.analyzeFile",
+        "title": "DevLens: Analyze Current File",
+        "icon": "$(search)"
+      },
+      {
+        "command": "devlens.showDashboard",
+        "title": "DevLens: Show Dashboard",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "devlens.runAIReview",
+        "title": "DevLens: Run AI Review",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "devlens.restartServer",
+        "title": "DevLens: Restart Language Server",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "devlens.clearCache",
+        "title": "DevLens: Clear Analysis Cache",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "devlens.configureAI",
+        "title": "DevLens: Configure AI Provider",
+        "icon": "$(gear)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "devlens.analyzeFile",
+          "when": "resourceLangId =~ /python|javascript|typescript|java|go|rust/",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "devlens.analyzeFile",
+          "group": "devlens@1"
+        },
+        {
+          "command": "devlens.runAIReview",
+          "group": "devlens@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DevLens",
+      "properties": {
+        "devlens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable DevLens analysis."
+        },
+        "devlens.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to the Python interpreter where DevLens is installed."
+        },
+        "devlens.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional arguments to pass to the DevLens language server."
+        },
+        "devlens.lintOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run DevLens analysis when a file is saved."
+        },
+        "devlens.lintOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run DevLens analysis when a file is opened."
+        },
+        "devlens.lintOnChange": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run DevLens analysis on every keystroke (debounced). May impact performance."
+        },
+        "devlens.debounceMs": {
+          "type": "number",
+          "default": 500,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Debounce delay in milliseconds for lint-on-change."
+        },
+        "devlens.severityFilter": {
+          "type": "string",
+          "default": "low",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ],
+          "description": "Minimum severity level to display (critical = fewest, info = all)."
+        },
+        "devlens.showCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show DevLens quality score as CodeLens at the top of each file."
+        },
+        "devlens.configPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to .devlens.yml configuration file. Leave empty for auto-detection."
+        },
+        "devlens.aiReview.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable AI-powered code review (requires API key)."
+        },
+        "devlens.aiReview.provider": {
+          "type": "string",
+          "default": "openai",
+          "enum": [
+            "openai",
+            "anthropic"
+          ],
+          "description": "AI provider for code review."
+        },
+        "devlens.aiReview.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for AI review. Leave empty for provider default."
+        },
+        "devlens.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "debug",
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "Language server log level."
+        },
+        "devlens.maxFileSize": {
+          "type": "number",
+          "default": 500000,
+          "description": "Maximum file size in bytes for analysis (default: 500KB)."
+        },
+        "devlens.trace.server": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "description": "Trace communication between VS Code and the DevLens language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "@vscode/vsce": "^2.22.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
