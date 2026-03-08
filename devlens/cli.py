@@ -26,6 +26,7 @@ from devlens.plugins import (
     create_plugin_template,
 )
 from devlens.ai_review import run_ai_review_sync, configure_api_key, ReviewMode
+from devlens.language_server import start_server as _start_lsp
 from devlens.ignore import load_ignore_patterns
 
 console = Console()
@@ -390,9 +391,9 @@ def _run_init_flow() -> None:
 # ── main group ────────────────────────────────────────────────
 
 @click.group()
-@click.version_option(version="0.7.0", prog_name="devlens")
+@click.version_option(version="0.8.0", prog_name="devlens")
 def main() -> None:
-    """DevLens — AI-powered developer assistant.
+    """DevLens -- AI-powered developer assistant.
 
     Commands:\n
       init     Set up your AI provider (run once)\n
@@ -401,6 +402,9 @@ def main() -> None:
       onboard  Generate an onboarding guide for a repository\n
       docs     Check documentation health\n
       doctor   Diagnose and fix common setup issues\n
+      plugin   Manage DevLens plugins\n
+      ai-review  AI-powered code review\n
+      lsp      Language Server Protocol commands\n
     """
 
 
@@ -2436,3 +2440,112 @@ def ai_configure(provider: str, api_key: str, config_file: str):
 
 if __name__ == "__main__":
     main()
+
+
+# -- devlens lsp ---------------------------------------------------------------
+
+@main.group()
+def lsp() -> None:
+    """Language Server Protocol commands.
+
+    Start the DevLens LSP server for IDE integration.
+
+    Examples:\n
+      devlens lsp start\n
+      devlens lsp start --mode tcp --port 2087\n
+    """
+
+
+@lsp.command()
+@click.option(
+    "--mode",
+    type=click.Choice(["stdio", "tcp"]),
+    default="stdio",
+    show_default=True,
+    help="Connection mode. Use 'stdio' for editor clients, 'tcp' for debugging.",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    show_default=True,
+    help="TCP host (only used in tcp mode).",
+)
+@click.option(
+    "--port",
+    type=int,
+    default=2087,
+    show_default=True,
+    help="TCP port (only used in tcp mode).",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(["debug", "info", "warning", "error"]),
+    default="info",
+    show_default=True,
+    help="Logging verbosity.",
+)
+def start(mode: str, host: str, port: int, log_level: str) -> None:
+    """Start the DevLens language server.
+
+    The language server provides real-time diagnostics, code actions,
+    hover info, and CodeLens for any LSP-capable editor.
+
+    STDIO mode (default) is used by editor extensions like VS Code.
+    TCP mode is useful for development and debugging.
+
+    Examples:\n
+      devlens lsp start\n
+      devlens lsp start --mode tcp --port 2087\n
+      devlens lsp start --log-level debug\n
+    """
+    console.print(
+        Panel(
+            f"[bold green]DevLens LSP Server v0.8.0[/]\n\n"
+            f"  Mode     : [cyan]{mode}[/]\n"
+            f"  Host     : [dim]{host}[/]\n"
+            f"  Port     : [dim]{port}[/]\n"
+            f"  Log Level: [dim]{log_level}[/]\n\n"
+            f"[dim]Press Ctrl+C to stop[/]",
+            title="[bold]Language Server[/]",
+            border_style="blue",
+        )
+    )
+    try:
+        _start_lsp(mode=mode, host=host, port=port, log_level=log_level)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Server stopped.[/]")
+    except ImportError:
+        console.print(
+            "[red]Error:[/] pygls is not installed.\n"
+            "Install with: [bold]pip install devlens\\[ide][/]"
+        )
+        raise SystemExit(1)
+
+
+@lsp.command()
+def info() -> None:
+    """Show LSP server information and status."""
+    console.print(
+        Panel(
+            "[bold]DevLens Language Server[/]\n\n"
+            "  Version  : 0.8.0\n"
+            "  Protocol : LSP 3.17\n"
+            "  Runtime  : pygls 2.0+\n"
+            "  Transport: STDIO / TCP\n\n"
+            "[bold]Capabilities:[/]\n"
+            "  - Diagnostics (security, complexity, rules, deps)\n"
+            "  - Code Actions (quick fixes)\n"
+            "  - Hover (rule explanations)\n"
+            "  - CodeLens (quality score)\n"
+            "  - Commands (analyze, dashboard, AI review)\n\n"
+            "[bold]Supported Editors:[/]\n"
+            "  - VS Code (via DevLens extension)\n"
+            "  - Neovim (via nvim-lspconfig)\n"
+            "  - Sublime Text (via LSP package)\n"
+            "  - Emacs (via lsp-mode / eglot)\n\n"
+            "[bold]Installation:[/]\n"
+            "  pip install devlens[ide]",
+            title="[bold]LSP Info[/]",
+            border_style="blue",
+        )
+    )
