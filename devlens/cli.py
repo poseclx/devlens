@@ -17,7 +17,7 @@ from rich import box
 
 from devlens.github import fetch_pr
 from devlens.analyzer import analyze_pr, ReviewResult
-from devlens.config import load_config, get_cache_config, get_rules_config
+from devlens.config import load_config, get_cache_config, get_rules_config, get_dashboard_config, get_scoreboard_config
 from devlens.ignore import load_ignore_patterns
 
 console = Console()
@@ -382,7 +382,7 @@ def _run_init_flow() -> None:
 # ── main group ────────────────────────────────────────────────
 
 @click.group()
-@click.version_option(version="0.5.0", prog_name="devlens")
+@click.version_option(version="0.6.0", prog_name="devlens")
 def main() -> None:
     """DevLens — AI-powered developer assistant.
 
@@ -1680,6 +1680,265 @@ def rules_validate_cmd(rule_file: str) -> None:
             console.print(f"  [red]Rule '{err.rule_id}'[/] -> field '{err.field}': {err.message}")
         console.print()
         sys.exit(1)
+
+
+# ── devlens dashboard ─────────────────────────────────────────
+
+@main.command("dashboard")
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option("--output", "-o", default="devlens-dashboard.html", help="Output HTML file path.")
+@click.option("--skip", multiple=True, help="Sections to skip (complexity, security, dependencies, docs, rules).")
+@click.option("--port", type=int, default=None, help="Start a local HTTP server on this port after generating.")
+@click.option("--open/--no-open", "auto_open", default=True, help="Auto-open in browser.")
+def dashboard_cmd(target: str, output: str, skip: tuple[str, ...], port: int | None, auto_open: bool) -> None:
+    """Generate an interactive HTML dashboard for the project.
+
+    Runs all DevLens analyses (complexity, security, dependency audit,
+    docs check, custom rules) and produces a single self-contained HTML
+    file with charts, tables, and dark/light theme toggle.
+
+    Examples:\n
+      devlens dashboard\n
+      devlens dashboard ./my-project -o report.html\n
+      devlens dashboard --skip docs --skip rules\n
+      devlens dashboard --port 8080\n
+    """
+    from devlens.dashboard import collect_project_metrics, generate_dashboard_html
+
+    cfg = load_config(Path(target))
+    skip_set = set(skip) if skip else set()
+
+    console.print()
+    console.print("[bold]Collecting project metrics...[/]")
+
+    with console.status("[dim]Running analyses...[/]"):
+        data = collect_project_metrics(target, config=cfg, skip=skip_set)
+
+    console.print(f"  [green]Found {len(data.cards)} metrics across {len(data.sections)} sections[/]")
+
+    html_content = generate_dashboard_html(data)
+    out_path = Path(output)
+    out_path.write_text(html_content, encoding="utf-8")
+    console.print(f"  [green]Dashboard written to[/] [bold]{out_path}[/]")
+
+    if port:
+        import http.server
+        import threading
+        import webbrowser
+
+        os.chdir(out_path.parent)
+        handler = http.server.SimpleHTTPRequestHandler
+        server = http.server.HTTPServer(("127.0.0.1", port), handler)
+        url = f"http://127.0.0.1:{port}/{out_path.name}"
+        console.print(f"\n  [bold]Serving at[/] [link={url}]{url}[/link]")
+        console.print("  [dim]Press Ctrl+C to stop[/]\n")
+        if auto_open:
+            webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            server.shutdown()
+            console.print("\n[dim]Server stopped.[/]")
+    elif auto_open:
+        import webbrowser
+        webbrowser.open(str(out_path.resolve()))
+
+    console.print()
+
+
+# ── devlens scoreboard ────────────────────────────────────────
+
+@main.group("scoreboard")
+def scoreboard_group() -> None:
+    """Team scoreboard — track and compare developer metrics."""
+
+
+@scoreboard_group.command("record")
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option("--author", "-a", required=True, help="Developer name or handle.")
+@click.option("--pr", "pr_number", type=int, default=None, help="Associated PR number.")
+def scoreboard_record_cmd(target: str, author: str, pr_number: int | None) -> None:
+    """Record current analysis metrics for a developer.
+
+    Runs complexity + security + rules analysis on the target path and
+    saves the results to the project's score history.
+
+    Examples:\n
+      devlens scoreboard record --author alice\n
+      devlens scoreboard record ./src --author bob --pr 42\n
+    """
+    from devlens.scoreboard import record_score
+
+    cfg = load_config(Path(target))
+    metrics: dict = {}
+
+    # Collect complexity
+    console.print()
+    with console.status("[dim]Analyzing complexity...[/]"):
+        try:
+            from devlens.complexity import analyze_path
+            report = analyze_path(target)
+            metrics["complexity_avg"] = round(report.avg_complexity, 1)
+            metrics["complexity_grade"] = report.overall_grade
+        except Exception:
+            pass
+
+    # Collect security
+    with console.status("[dim]Running security scan...[/]"):
+        try:
+            from devlens.security import scan_path
+            findings = scan_path(target)
+            metrics["security_issues"] = len(findings)
+        except Exception:
+            pass
+
+    # Collect rules
+    with console.status("[dim]Evaluating rules...[/]"):
+        try:
+            from devlens.rules import RuleEngine
+            engine = RuleEngine(config=cfg.get("rules", {}))
+            violations = engine.evaluate_path(target)
+            metrics["rule_violations"] = len(violations)
+        except Exception:
+            pass
+
+    metrics["reviews"] = 1  # each record counts as one review contribution
+
+    sb_cfg = get_scoreboard_config(cfg)
+    entry = record_score(
+        target,
+        author=author,
+        pr_number=pr_number,
+        metrics=metrics,
+        scores_dir=sb_cfg.get("dir"),
+    )
+
+    console.print(f"  [green]Recorded score for[/] [bold]{author}[/]")
+    for k, v in metrics.items():
+        console.print(f"    {k}: {v}")
+    console.print(f"  [dim]Timestamp: {entry.timestamp}[/]")
+    console.print()
+
+
+@scoreboard_group.command("show")
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option("--output", "-o", default="devlens-scoreboard.html", help="Output HTML file path.")
+@click.option("--open/--no-open", "auto_open", default=True, help="Auto-open in browser.")
+def scoreboard_show_cmd(target: str, output: str, auto_open: bool) -> None:
+    """Generate the HTML scoreboard with leaderboard and charts.
+
+    Examples:\n
+      devlens scoreboard show\n
+      devlens scoreboard show -o team-scores.html\n
+    """
+    from devlens.scoreboard import load_history, generate_scoreboard_html
+
+    cfg = load_config(Path(target))
+    sb_cfg = get_scoreboard_config(cfg)
+
+    history = load_history(target, scores_dir=sb_cfg.get("dir"))
+
+    if not history.entries:
+        console.print("\n[yellow]No scores recorded yet.[/]")
+        console.print("[dim]Use 'devlens scoreboard record --author <name>' first.[/]\n")
+        return
+
+    html_content = generate_scoreboard_html(history)
+    out_path = Path(output)
+    out_path.write_text(html_content, encoding="utf-8")
+
+    console.print(f"\n  [green]Scoreboard written to[/] [bold]{out_path}[/]")
+    console.print(f"  [dim]{len(history.entries)} entries, {len(history.authors)} authors[/]")
+
+    if auto_open:
+        import webbrowser
+        webbrowser.open(str(out_path.resolve()))
+
+    console.print()
+
+
+@scoreboard_group.command("history")
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option("--author", "-a", default=None, help="Filter by author.")
+@click.option("--json-out", "as_json", is_flag=True, help="Output as raw JSON.")
+def scoreboard_history_cmd(target: str, author: str | None, as_json: bool) -> None:
+    """Show score history for the project.
+
+    Examples:\n
+      devlens scoreboard history\n
+      devlens scoreboard history --author alice\n
+      devlens scoreboard history --json-out\n
+    """
+    from devlens.scoreboard import load_history
+    from dataclasses import asdict
+
+    cfg = load_config(Path(target))
+    sb_cfg = get_scoreboard_config(cfg)
+
+    history = load_history(target, scores_dir=sb_cfg.get("dir"))
+
+    entries = history.entries
+    if author:
+        entries = [e for e in entries if e.author == author]
+
+    if not entries:
+        console.print("\n[yellow]No entries found.[/]\n")
+        return
+
+    if as_json:
+        console.print(json.dumps([asdict(e) for e in entries], indent=2))
+        return
+
+    console.print()
+    table = Table(title="Score History", box=box.ROUNDED)
+    table.add_column("Date", style="dim")
+    table.add_column("Author", style="bold")
+    table.add_column("PR")
+    table.add_column("Complexity")
+    table.add_column("Security")
+    table.add_column("Violations")
+
+    for e in entries[-20:]:  # last 20
+        m = e.metrics
+        table.add_row(
+            e.timestamp[:10],
+            e.author,
+            str(e.pr_number or "-"),
+            str(m.get("complexity_avg", "-")),
+            str(m.get("security_issues", "-")),
+            str(m.get("rule_violations", "-")),
+        )
+
+    console.print(table)
+    if len(entries) > 20:
+        console.print(f"  [dim]Showing last 20 of {len(entries)} entries[/]")
+    console.print()
+
+
+@scoreboard_group.command("reset")
+@click.argument("target", default=".", type=click.Path(exists=True))
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
+def scoreboard_reset_cmd(target: str, yes: bool) -> None:
+    """Reset (delete) all score history for this project.
+
+    Examples:\n
+      devlens scoreboard reset\n
+      devlens scoreboard reset -y\n
+    """
+    from devlens.scoreboard import reset_history
+
+    if not yes:
+        if not click.confirm("Delete all score history?"):
+            console.print("[dim]Cancelled.[/]")
+            return
+
+    cfg = load_config(Path(target))
+    sb_cfg = get_scoreboard_config(cfg)
+
+    if reset_history(target, scores_dir=sb_cfg.get("dir")):
+        console.print("\n[green]Score history deleted.[/]\n")
+    else:
+        console.print("\n[yellow]No history file found.[/]\n")
 
 
 if __name__ == "__main__":
