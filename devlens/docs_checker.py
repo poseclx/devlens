@@ -40,7 +40,8 @@ Return a JSON object with this structure:
     }
   ],
   "recommendations": ["actionable recommendation 1", "actionable recommendation 2"]
-}"""
+}
+"""
 
 
 @dataclass
@@ -114,8 +115,9 @@ class DocsHealthResult:
         if self.issues:
             lines += ["## Issues", ""]
             for issue in self.issues:
+                emoji = {"error": "🔴", "warning": "🟡", "info": "🔵"}.get(issue.severity, "⚪")
                 lines += [
-                    f"### {issue.title} (Block #{issue.block_index})",
+                    f"### {emoji} {issue.title} (Block #{issue.block_index})",
                     f"",
                     f"**Severity:** {issue.severity}",
                     f"",
@@ -179,6 +181,7 @@ def _static_check(blocks: list[CodeBlock], content: str) -> DocsHealthResult:
     total = len(blocks)
 
     for b in blocks:
+        # Flag blocks with no language tag
         if b.language == "text" and b.code:
             issues.append(DocsIssue(
                 block_index=b.index,
@@ -189,6 +192,7 @@ def _static_check(blocks: list[CodeBlock], content: str) -> DocsHealthResult:
                 suggestion="Add a language tag, e.g. ```python or ```bash",
                 code=b.code,
             ))
+        # Flag very short (likely incomplete) code blocks
         if len(b.code.strip().splitlines()) == 1 and b.language in ("python", "py", "bash", "sh"):
             issues.append(DocsIssue(
                 block_index=b.index,
@@ -236,10 +240,17 @@ def _call_llm(model: str, prompt: str) -> str:
         return _anthropic(model, prompt, os.environ.get("ANTHROPIC_API_KEY"))
     elif model.startswith("gemini"):
         return _gemini(model, prompt, os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+    elif model.startswith("groq/"):
+        return _groq(model.removeprefix("groq/"), prompt)
+    elif model.startswith("ollama/"):
+        return _ollama(model.removeprefix("ollama/"), prompt)
+    elif model.startswith("openrouter/"):
+        return _openrouter(model.removeprefix("openrouter/"), prompt)
     else:
         raise ValueError(
-            f"Unsupported model: {model!r}. "
-            "Use gpt-* / o1-* / o3-* (OpenAI), claude-* (Anthropic), or gemini-* (Google)."
+            f"Unsupported model: {model!r}. Supported prefixes: "
+            "gpt-*, o1-*, o3-* (OpenAI), claude-* (Anthropic), gemini-* (Google), "
+            "groq/* (Groq), ollama/* (Ollama), openrouter/* (OpenRouter)."
         )
 
 
@@ -293,14 +304,115 @@ def _gemini(model: str, prompt: str, key: str | None) -> str:
     return response.text or "{}"
 
 
+# ── Free / alternative providers ──────────────────────────────
+
+
+def _groq(model: str, prompt: str) -> str:
+    """Groq Cloud — free tier, extremely fast inference."""
+    import os
+    from groq import Groq
+
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "GROQ_API_KEY environment variable is not set. "
+            "Get a free key at https://console.groq.com/keys"
+        )
+    client = Groq(api_key=key)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content or "{}"
+
+
+def _ollama(model: str, prompt: str) -> str:
+    """Ollama — 100% local, completely free, no API key needed."""
+    import os
+    import httpx
+
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+    try:
+        resp = httpx.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+    except httpx.ConnectError:
+        raise EnvironmentError(
+            f"Cannot connect to Ollama at {base_url}. "
+            "Make sure Ollama is running: ollama serve"
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise EnvironmentError(
+                f"Model '{model}' not found in Ollama. "
+                f"Pull it first: ollama pull {model}"
+            )
+        raise
+
+    data = resp.json()
+    return data.get("message", {}).get("content", "{}")
+
+
+def _openrouter(model: str, prompt: str) -> str:
+    """OpenRouter — unified gateway to 100+ models, many free."""
+    import os
+    from openai import OpenAI
+
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "OPENROUTER_API_KEY environment variable is not set. "
+            "Get a key at https://openrouter.ai/keys"
+        )
+    client = OpenAI(
+        api_key=key,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content or "{}"
+
+
 def _ai_check(blocks: list[CodeBlock], content: str, file_path: str, model: str, api_key: str | None) -> DocsHealthResult:
     """AI-powered docs check — supports OpenAI, Anthropic, and Google Gemini."""
     import os
+    # Allow caller to override the key via argument
     if api_key:
         if model.startswith("claude"):
             os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
         elif model.startswith("gemini"):
             os.environ.setdefault("GEMINI_API_KEY", api_key)
+        elif model.startswith("groq/"):
+            os.environ.setdefault("GROQ_API_KEY", api_key)
+        elif model.startswith("openrouter/"):
+            os.environ.setdefault("OPENROUTER_API_KEY", api_key)
+        elif model.startswith("ollama/"):
+            pass  # Ollama is local, no API key needed
         else:
             os.environ.setdefault("OPENAI_API_KEY", api_key)
 
