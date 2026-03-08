@@ -56,6 +56,51 @@ PROVIDERS = {
         "key_prefix": "AI",
         "key_hint": "Get from https://aistudio.google.com/apikey",
     },
+    "groq": {
+        "label": "Groq (FREE — ultra-fast)",
+        "models": [
+            "groq/llama-3.3-70b-versatile",
+            "groq/llama-3.1-8b-instant",
+            "groq/mixtral-8x7b-32768",
+            "groq/gemma2-9b-it",
+        ],
+        "default": "groq/llama-3.3-70b-versatile",
+        "env": "GROQ_API_KEY",
+        "install": "groq",
+        "key_prefix": "gsk_",
+        "key_hint": "FREE — get from https://console.groq.com/keys",
+    },
+    "ollama": {
+        "label": "Ollama (FREE — runs locally)",
+        "models": [
+            "ollama/llama3.1",
+            "ollama/llama3.1:70b",
+            "ollama/codellama",
+            "ollama/mistral",
+            "ollama/deepseek-coder-v2",
+        ],
+        "default": "ollama/llama3.1",
+        "env": "",
+        "install": "",
+        "key_prefix": "",
+        "key_hint": "No API key needed! Install Ollama from https://ollama.com",
+        "no_key": True,
+    },
+    "openrouter": {
+        "label": "OpenRouter (100+ models, free tier)",
+        "models": [
+            "openrouter/meta-llama/llama-3.1-8b-instruct:free",
+            "openrouter/google/gemma-2-9b-it:free",
+            "openrouter/mistralai/mistral-7b-instruct:free",
+            "openrouter/meta-llama/llama-3.1-70b-instruct",
+            "openrouter/anthropic/claude-3.5-sonnet",
+        ],
+        "default": "openrouter/meta-llama/llama-3.1-8b-instruct:free",
+        "env": "OPENROUTER_API_KEY",
+        "install": "openai",
+        "key_prefix": "sk-or-",
+        "key_hint": "Get from https://openrouter.ai/keys (free models available!)",
+    },
 }
 
 _CONFIG_PATH = Path.home() / ".devlens" / "config.json"
@@ -69,7 +114,7 @@ def _resolve_model(model_flag: str | None, cfg: dict) -> tuple[str, str]:
                 return model_flag, pname
         raise click.BadParameter(
             f"Cannot detect provider for model '{model_flag}'. "
-            "Use gpt-*, claude-*, or gemini-* prefixed model names."
+            "Supported prefixes: gpt-*, claude-*, gemini-*, groq/*, ollama/*, openrouter/*"
         )
 
     saved = _load_setup()
@@ -77,8 +122,11 @@ def _resolve_model(model_flag: str | None, cfg: dict) -> tuple[str, str]:
     provider = cfg.get("provider") or saved.get("provider")
 
     if model and provider:
-        # Check if API key is available
         pinfo = PROVIDERS.get(provider, {})
+        # Ollama needs no API key
+        if pinfo.get("no_key"):
+            return model, provider
+        # Check if API key is available
         env_var = pinfo.get("env", "")
         api_key = saved.get("api_key") or os.environ.get(env_var, "")
         if not api_key:
@@ -91,7 +139,7 @@ def _resolve_model(model_flag: str | None, cfg: dict) -> tuple[str, str]:
             ))
             sys.exit(1)
         # Set env var from saved config if not already set
-        if not os.environ.get(env_var) and saved.get("api_key"):
+        if env_var and not os.environ.get(env_var) and saved.get("api_key"):
             os.environ[env_var] = saved["api_key"]
         return model, provider
 
@@ -125,6 +173,12 @@ def _model_prefixes(provider: str) -> list[str]:
         return ["claude"]
     if provider == "gemini":
         return ["gemini"]
+    if provider == "groq":
+        return ["groq/"]
+    if provider == "ollama":
+        return ["ollama/"]
+    if provider == "openrouter":
+        return ["openrouter/"]
     return []
 
 
@@ -213,13 +267,20 @@ def _run_init_flow() -> None:
 
     # --- 1. Provider choice ---
     provider_choices = list(PROVIDERS.keys())
+    num_providers = len(provider_choices)
+    console.print("  [dim]── Paid ──[/]")
     for i, (key, info) in enumerate(PROVIDERS.items(), 1):
-        console.print(f"  [bold cyan]{i}.[/] {info['label']}")
+        tag = " [bold green]FREE[/]" if info.get("no_key") or "FREE" in info["label"] else ""
+        if i == 4 and num_providers > 3:
+            console.print()
+            console.print("  [dim]── Free / Local ──[/]")
+        console.print(f"  [bold cyan]{i}.[/] {info['label']}{tag}")
     console.print()
 
+    valid_choices = [str(i) for i in range(1, num_providers + 1)]
     raw = click.prompt(
-        "Select provider (1/2/3)",
-        type=click.Choice(["1", "2", "3"]),
+        f"Select provider (1-{num_providers})",
+        type=click.Choice(valid_choices),
         show_choices=False,
     )
     provider = provider_choices[int(raw) - 1]
@@ -230,7 +291,8 @@ def _run_init_flow() -> None:
     console.print(f"[bold]Models for {pinfo['label']}:[/]")
     for i, m in enumerate(pinfo["models"], 1):
         default_tag = " [dim](default)[/]" if m == pinfo["default"] else ""
-        console.print(f"  [bold cyan]{i}.[/] {m}{default_tag}")
+        free_tag = " [green]FREE[/]" if ":free" in m else ""
+        console.print(f"  [bold cyan]{i}.[/] {m}{default_tag}{free_tag}")
     console.print()
 
     model_raw = click.prompt(
@@ -241,50 +303,62 @@ def _run_init_flow() -> None:
     )
     model = pinfo["models"][int(model_raw) - 1]
 
-    # --- 3. API Key ---
-    env_var = pinfo["env"]
-    existing_key = os.environ.get(env_var, "")
+    # --- 3. API Key (skip for Ollama) ---
+    api_key = ""
+    env_var = pinfo.get("env", "")
 
-    console.print()
-    if existing_key:
-        masked = existing_key[:8] + "..." + existing_key[-4:]
-        console.print(f"[green]Found existing key:[/] {masked}")
-        use_existing = click.confirm("Use this key?", default=True)
-        if use_existing:
-            api_key = existing_key
+    if pinfo.get("no_key"):
+        # Ollama: no key needed, just check connectivity
+        console.print()
+        console.print("[bold green]No API key needed![/] Ollama runs locally.")
+        console.print("[dim]Make sure Ollama is running: ollama serve[/]")
+        console.print(f"[dim]And pull the model: ollama pull {model.removeprefix('ollama/')}[/]")
+    else:
+        existing_key = os.environ.get(env_var, "") if env_var else ""
+        console.print()
+        if existing_key:
+            masked = existing_key[:8] + "..." + existing_key[-4:]
+            console.print(f"[green]Found existing key:[/] {masked}")
+            use_existing = click.confirm("Use this key?", default=True)
+            if use_existing:
+                api_key = existing_key
+            else:
+                api_key = click.prompt(
+                    f"Enter your {pinfo['label']} API key",
+                    hide_input=True,
+                ).strip()
         else:
+            console.print(f"[bold]Enter your {pinfo['label']} API key[/]")
+            console.print(f"[dim]{pinfo['key_hint']}[/]")
             api_key = click.prompt(
-                f"Enter your {pinfo['label']} API key",
+                "API key",
                 hide_input=True,
             ).strip()
-    else:
-        console.print(f"[bold]Enter your {pinfo['label']} API key[/]")
-        console.print(f"[dim]{pinfo['key_hint']}[/]")
-        api_key = click.prompt(
-            "API key",
-            hide_input=True,
-        ).strip()
 
-    if not api_key:
-        console.print("[red]No API key provided. Setup cancelled.[/]")
-        return
+        if not api_key:
+            console.print("[red]No API key provided. Setup cancelled.[/]")
+            return
 
-    # Set for current session
-    os.environ[env_var] = api_key
+        # Set for current session
+        if env_var:
+            os.environ[env_var] = api_key
 
-    # --- 4. Install AI package ---
-    _install_package(pinfo["install"])
+    # --- 4. Install AI package (skip if empty) ---
+    if pinfo.get("install"):
+        _install_package(pinfo["install"])
 
     # --- 5. Fix PATH on Windows ---
     if platform.system() == "Windows":
         _fix_windows_path()
 
     # --- 6. Save config ---
-    _save_setup({
+    setup_data = {
         "provider": provider,
         "model": model,
-        "api_key": api_key,
-    })
+    }
+    if api_key:
+        setup_data["api_key"] = api_key
+    _save_setup(setup_data)
 
     console.print()
     console.print(Panel(
