@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlens"
-version = "0.1.0"
-description = "A PR review assistant that tells you what actually matters"
+version = "0.2.0"
+description = "AI-powered PR review, security scanning, and developer onboarding assistant"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
