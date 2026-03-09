@@ -1,7 +1,7 @@
 """Tests for devlens.fixer module."""
 import pytest
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 
 from devlens.fixer import (
     FixSuggestion,
@@ -9,6 +9,57 @@ from devlens.fixer import (
     format_fixes_markdown,
     format_fixes_json,
 )
+
+
+def _make_finding(rule_id, title, severity, file, line, match="", description=""):
+    """Create a Mock finding object with the attributes suggest_fixes expects."""
+    f = Mock()
+    f.rule_id = rule_id
+    f.title = title
+    f.severity = severity
+    f.file = file
+    f.line = line
+    f.match = match
+    f.description = description
+    return f
+
+
+@pytest.fixture
+def mock_findings():
+    """Sample findings as Mock objects (not dicts) matching the API."""
+    return {
+        "security": [
+            _make_finding(
+                rule_id="SEC001",
+                title="Shell injection risk",
+                severity="high",
+                file="app.py",
+                line=10,
+                match="subprocess.call(cmd, shell=True)",
+                description="subprocess.call with shell=True",
+            ),
+            _make_finding(
+                rule_id="SEC009",
+                title="Hardcoded credential",
+                severity="critical",
+                file="config.py",
+                line=5,
+                match='password = "admin123"',
+                description="Hardcoded password detected",
+            ),
+        ],
+        "complexity": [
+            _make_finding(
+                rule_id="CX001",
+                title="High cyclomatic complexity",
+                severity="medium",
+                file="utils.py",
+                line=1,
+                match="def process_data(...):",
+                description="Function has cyclomatic complexity > 10",
+            ),
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -58,33 +109,33 @@ class TestFixSuggestion:
 # ---------------------------------------------------------------------------
 
 class TestSuggestFixes:
-    def test_returns_list(self, sample_findings):
+    def test_returns_list(self, mock_findings):
         all_findings = []
-        for category_findings in sample_findings.values():
+        for category_findings in mock_findings.values():
             all_findings.extend(category_findings)
         fixes = suggest_fixes(all_findings, use_ai=False)
         assert isinstance(fixes, list)
 
-    def test_security_findings_get_fixes(self, sample_findings):
-        fixes = suggest_fixes(sample_findings["security"], use_ai=False)
+    def test_security_findings_get_fixes(self, mock_findings):
+        fixes = suggest_fixes(mock_findings["security"], use_ai=False)
         # At least some security findings should produce fix suggestions
         assert isinstance(fixes, list)
 
-    def test_with_file_contents(self, sample_findings):
+    def test_with_file_contents(self, mock_findings):
         contents = {
             "app.py": "import subprocess\nsubprocess.call(cmd, shell=True)\n",
             "config.py": 'password = "admin123"\n',
         }
         fixes = suggest_fixes(
-            sample_findings["security"],
+            mock_findings["security"],
             file_contents=contents,
             use_ai=False,
         )
         assert isinstance(fixes, list)
 
-    def test_max_fixes_limit(self, sample_findings):
+    def test_max_fixes_limit(self, mock_findings):
         all_findings = []
-        for category_findings in sample_findings.values():
+        for category_findings in mock_findings.values():
             all_findings.extend(category_findings)
         fixes = suggest_fixes(all_findings, use_ai=False, max_fixes=1)
         assert len(fixes) <= 1
@@ -93,8 +144,8 @@ class TestSuggestFixes:
         fixes = suggest_fixes([], use_ai=False)
         assert fixes == []
 
-    @patch("devlens.fixer._ai_suggest_fix")
-    def test_ai_mode_calls_llm(self, mock_ai, sample_findings):
+    @patch("devlens.fixer._ai_fix")
+    def test_ai_mode_calls_llm(self, mock_ai, mock_findings):
         mock_ai.return_value = FixSuggestion(
             finding_id="SEC001", file="app.py",
             title="AI Fix", original="old", suggested="new",
@@ -102,7 +153,7 @@ class TestSuggestFixes:
             confidence="high",
         )
         fixes = suggest_fixes(
-            sample_findings["security"][:1],
+            mock_findings["security"][:1],
             use_ai=True, model="gpt-4o",
         )
         assert isinstance(fixes, list)
