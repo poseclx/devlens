@@ -52,19 +52,19 @@ class TestSectionData:
         section = SectionData(id="complexity", title="Complexity Analysis")
         assert section.id == "complexity"
         assert section.title == "Complexity Analysis"
-        assert section.rows == []
+        assert section.table_rows == []
         assert section.chart_data == {}
 
     def test_with_rows(self):
         rows = [
-            {"function": "process_data", "complexity": "12", "risk": "high"},
-            {"function": "validate", "complexity": "6", "risk": "medium"},
+            ["process_data", "12", "high"],
+            ["validate", "6", "medium"],
         ]
         section = SectionData(
             id="cx", title="Complexity",
-            rows=rows, summary="2 functions analyzed",
+            table_rows=rows, summary="2 functions analyzed",
         )
-        assert len(section.rows) == 2
+        assert len(section.table_rows) == 2
         assert section.summary == "2 functions analyzed"
 
 
@@ -100,13 +100,19 @@ class TestCollectProjectMetrics:
     @patch("devlens.dashboard._collect_complexity")
     @patch("devlens.dashboard._collect_security")
     def test_returns_dashboard_data(self, mock_sec, mock_cx, tmp_python_project):
-        mock_cx.return_value = SectionData(
-            id="complexity", title="Complexity",
-            summary="Analyzed", rows=[],
+        mock_cx.return_value = (
+            [],
+            SectionData(
+                id="complexity", title="Complexity",
+                summary="Analyzed", table_rows=[],
+            ),
         )
-        mock_sec.return_value = SectionData(
-            id="security", title="Security",
-            summary="Scanned", rows=[],
+        mock_sec.return_value = (
+            [],
+            SectionData(
+                id="security", title="Security",
+                summary="Scanned", table_rows=[],
+            ),
         )
         data = collect_project_metrics(str(tmp_python_project))
         assert isinstance(data, DashboardData)
@@ -155,7 +161,7 @@ class TestGenerateDashboardHtml:
             sections=[
                 SectionData(
                     id="cx", title="Complexity",
-                    rows=[{"name": "func1", "score": "5"}],
+                    table_rows=[["func1", "5"]],
                 ),
             ],
         )
