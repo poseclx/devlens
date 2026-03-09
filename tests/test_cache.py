@@ -9,37 +9,55 @@ from devlens.cache import CacheManager, CacheStats, cached_analysis
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_file(tmp_path, relpath, content="print('hello')"):
+    """Create a real file under tmp_path so _hash_file can compute SHA-256."""
+    p = tmp_path / relpath
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    return str(relpath)
+
+
+@pytest.fixture
+def cache(tmp_path):
+    """Create a CacheManager rooted at tmp_path."""
+    return CacheManager(root=str(tmp_path), ttl_days=7)
+
+
+# ---------------------------------------------------------------------------
 # CacheManager basic operations
 # ---------------------------------------------------------------------------
 
 class TestCacheManagerBasic:
-    def test_init(self, mock_cache_manager):
-        assert mock_cache_manager is not None
+    def test_init(self, cache):
+        assert cache is not None
 
-    def test_set_and_get(self, mock_cache_manager):
-        mock_cache_manager.set(
-            "test.py", analyzer="complexity",
-            data={"cyclomatic": 5},
-        )
-        result = mock_cache_manager.get("test.py", analyzer="complexity")
+    def test_set_and_get(self, cache, tmp_path):
+        fp = _make_file(tmp_path, "test.py")
+        cache.set(fp, analyzer="complexity", data={"cyclomatic": 5})
+        result = cache.get(fp, analyzer="complexity")
         assert result is not None
         assert result["cyclomatic"] == 5
 
-    def test_get_missing_key(self, mock_cache_manager):
-        result = mock_cache_manager.get("nonexistent.py", analyzer="complexity")
+    def test_get_missing_key(self, cache):
+        result = cache.get("nonexistent.py", analyzer="complexity")
         assert result is None
 
-    def test_set_overwrite(self, mock_cache_manager):
-        mock_cache_manager.set("f.py", analyzer="security", data={"count": 1})
-        mock_cache_manager.set("f.py", analyzer="security", data={"count": 2})
-        result = mock_cache_manager.get("f.py", analyzer="security")
+    def test_set_overwrite(self, cache, tmp_path):
+        fp = _make_file(tmp_path, "f.py")
+        cache.set(fp, analyzer="security", data={"count": 1})
+        cache.set(fp, analyzer="security", data={"count": 2})
+        result = cache.get(fp, analyzer="security")
         assert result["count"] == 2
 
-    def test_different_analyzers(self, mock_cache_manager):
-        mock_cache_manager.set("f.py", analyzer="complexity", data={"c": 1})
-        mock_cache_manager.set("f.py", analyzer="security", data={"s": 2})
-        c = mock_cache_manager.get("f.py", analyzer="complexity")
-        s = mock_cache_manager.get("f.py", analyzer="security")
+    def test_different_analyzers(self, cache, tmp_path):
+        fp = _make_file(tmp_path, "f.py")
+        cache.set(fp, analyzer="complexity", data={"c": 1})
+        cache.set(fp, analyzer="security", data={"s": 2})
+        c = cache.get(fp, analyzer="complexity")
+        s = cache.get(fp, analyzer="security")
         assert c["c"] == 1
         assert s["s"] == 2
 
@@ -49,32 +67,37 @@ class TestCacheManagerBasic:
 # ---------------------------------------------------------------------------
 
 class TestCacheInvalidation:
-    def test_invalidate_specific(self, mock_cache_manager):
-        mock_cache_manager.set("a.py", analyzer="complexity", data={"x": 1})
-        mock_cache_manager.set("b.py", analyzer="complexity", data={"x": 2})
-        count = mock_cache_manager.invalidate("a.py", analyzer="complexity")
+    def test_invalidate_specific(self, cache, tmp_path):
+        a = _make_file(tmp_path, "a.py", "aaa")
+        b = _make_file(tmp_path, "b.py", "bbb")
+        cache.set(a, analyzer="complexity", data={"x": 1})
+        cache.set(b, analyzer="complexity", data={"x": 2})
+        count = cache.invalidate(a, analyzer="complexity")
         assert count >= 1
-        assert mock_cache_manager.get("a.py", analyzer="complexity") is None
-        assert mock_cache_manager.get("b.py", analyzer="complexity") is not None
+        assert cache.get(a, analyzer="complexity") is None
+        assert cache.get(b, analyzer="complexity") is not None
 
-    def test_invalidate_all_analyzers(self, mock_cache_manager):
-        mock_cache_manager.set("f.py", analyzer="complexity", data={"c": 1})
-        mock_cache_manager.set("f.py", analyzer="security", data={"s": 2})
-        count = mock_cache_manager.invalidate("f.py")
+    def test_invalidate_all_analyzers(self, cache, tmp_path):
+        fp = _make_file(tmp_path, "f.py")
+        cache.set(fp, analyzer="complexity", data={"c": 1})
+        cache.set(fp, analyzer="security", data={"s": 2})
+        count = cache.invalidate(fp)
         assert count >= 2
-        assert mock_cache_manager.get("f.py", analyzer="complexity") is None
-        assert mock_cache_manager.get("f.py", analyzer="security") is None
+        assert cache.get(fp, analyzer="complexity") is None
+        assert cache.get(fp, analyzer="security") is None
 
-    def test_clear_all(self, mock_cache_manager):
-        mock_cache_manager.set("a.py", analyzer="complexity", data={"x": 1})
-        mock_cache_manager.set("b.py", analyzer="security", data={"y": 2})
-        count = mock_cache_manager.clear()
+    def test_clear_all(self, cache, tmp_path):
+        a = _make_file(tmp_path, "a.py", "aaa")
+        b = _make_file(tmp_path, "b.py", "bbb")
+        cache.set(a, analyzer="complexity", data={"x": 1})
+        cache.set(b, analyzer="security", data={"y": 2})
+        count = cache.clear()
         assert count >= 2
-        assert mock_cache_manager.get("a.py", analyzer="complexity") is None
-        assert mock_cache_manager.get("b.py", analyzer="security") is None
+        assert cache.get(a, analyzer="complexity") is None
+        assert cache.get(b, analyzer="security") is None
 
-    def test_invalidate_nonexistent(self, mock_cache_manager):
-        count = mock_cache_manager.invalidate("ghost.py", analyzer="complexity")
+    def test_invalidate_nonexistent(self, cache):
+        count = cache.invalidate("ghost.py", analyzer="complexity")
         assert count == 0
 
 
@@ -83,14 +106,16 @@ class TestCacheInvalidation:
 # ---------------------------------------------------------------------------
 
 class TestCacheStats:
-    def test_stats_empty(self, mock_cache_manager):
-        stats = mock_cache_manager.stats()
+    def test_stats_empty(self, cache):
+        stats = cache.stats()
         assert isinstance(stats, CacheStats)
 
-    def test_stats_after_set(self, mock_cache_manager):
-        mock_cache_manager.set("a.py", analyzer="complexity", data={"x": 1})
-        mock_cache_manager.set("b.py", analyzer="security", data={"y": 2})
-        stats = mock_cache_manager.stats()
+    def test_stats_after_set(self, cache, tmp_path):
+        a = _make_file(tmp_path, "a.py", "aaa")
+        b = _make_file(tmp_path, "b.py", "bbb")
+        cache.set(a, analyzer="complexity", data={"x": 1})
+        cache.set(b, analyzer="security", data={"y": 2})
+        stats = cache.stats()
         d = stats.to_dict()
         assert isinstance(d, dict)
 
@@ -106,17 +131,19 @@ class TestCacheStats:
 
 class TestCacheContextManager:
     def test_context_manager(self, tmp_path):
-        with CacheManager(root=str(tmp_path), ttl_days=7) as cache:
-            cache.set("test.py", analyzer="complexity", data={"val": 42})
-            result = cache.get("test.py", analyzer="complexity")
+        fp = _make_file(tmp_path, "test.py")
+        with CacheManager(root=str(tmp_path), ttl_days=7) as cm:
+            cm.set(fp, analyzer="complexity", data={"val": 42})
+            result = cm.get(fp, analyzer="complexity")
             assert result["val"] == 42
 
     def test_context_manager_saves_on_exit(self, tmp_path):
-        with CacheManager(root=str(tmp_path), ttl_days=7) as cache:
-            cache.set("test.py", analyzer="complexity", data={"val": 1})
+        fp = _make_file(tmp_path, "test.py")
+        with CacheManager(root=str(tmp_path), ttl_days=7) as cm:
+            cm.set(fp, analyzer="complexity", data={"val": 1})
         # After exit, data should be persisted
         cache2 = CacheManager(root=str(tmp_path), ttl_days=7)
-        result = cache2.get("test.py", analyzer="complexity")
+        result = cache2.get(fp, analyzer="complexity")
         assert result is not None
 
 
@@ -147,20 +174,22 @@ class TestConfigHash:
 # ---------------------------------------------------------------------------
 
 class TestCachedAnalysis:
-    def test_calls_function_on_miss(self, mock_cache_manager):
+    def test_calls_function_on_miss(self, tmp_path):
+        fp = _make_file(tmp_path, "test.py")
+        cm = CacheManager(root=str(tmp_path), ttl_days=7)
         call_count = 0
         def analyze_fn(filepath, **kwargs):
             nonlocal call_count
             call_count += 1
             return {"result": "fresh"}
 
-        result = cached_analysis(
-            mock_cache_manager, "test.py", "complexity", analyze_fn,
-        )
+        result = cached_analysis(cm, fp, "complexity", analyze_fn)
         assert result["result"] == "fresh"
         assert call_count == 1
 
-    def test_returns_cached_on_hit(self, mock_cache_manager):
+    def test_returns_cached_on_hit(self, tmp_path):
+        fp = _make_file(tmp_path, "test.py")
+        cm = CacheManager(root=str(tmp_path), ttl_days=7)
         call_count = 0
         def analyze_fn(filepath, **kwargs):
             nonlocal call_count
@@ -168,11 +197,9 @@ class TestCachedAnalysis:
             return {"result": "fresh"}
 
         # First call - cache miss
-        cached_analysis(mock_cache_manager, "test.py", "complexity", analyze_fn)
+        cached_analysis(cm, fp, "complexity", analyze_fn)
         # Second call - cache hit
-        result = cached_analysis(
-            mock_cache_manager, "test.py", "complexity", analyze_fn,
-        )
+        result = cached_analysis(cm, fp, "complexity", analyze_fn)
         assert call_count == 1  # Function only called once
         assert result["result"] == "fresh"
 
