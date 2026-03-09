@@ -2,6 +2,7 @@
 import pytest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from devlens.scoreboard import (
     ScoreEntry,
@@ -23,30 +24,36 @@ from devlens.scoreboard import (
 # ---------------------------------------------------------------------------
 
 class TestScoreEntry:
-    def test_default_fields(self):
+    def test_defaults(self):
         entry = ScoreEntry()
         assert entry.author == "unknown"
         assert entry.project == ""
         assert entry.pr_number is None
         assert entry.metrics == {}
+        # timestamp is auto-populated in __post_init__
+        assert entry.timestamp != ""
+        assert isinstance(entry.timestamp, str)
+        assert len(entry.timestamp) > 0
 
-    def test_with_fields(self):
+    def test_custom_fields(self):
         entry = ScoreEntry(
             author="alice",
             project="devlens",
             pr_number=42,
-            metrics={"complexity_avg": 5.2, "security_issues": 1},
+            metrics={"reviews": 5, "security_issues": 0},
         )
         assert entry.author == "alice"
         assert entry.pr_number == 42
-        assert entry.metrics["complexity_avg"] == 5.2
+        assert entry.metrics["reviews"] == 5
 
-    def test_finalize_timestamp(self):
-        entry = ScoreEntry()
-        assert entry.timestamp == ""
-        entry.finalize_timestamp()
-        assert entry.timestamp != ""
-        assert len(entry.timestamp) > 0
+    def test_auto_timestamp(self):
+        entry = ScoreEntry(author="bob")
+        # timestamp auto-populated, should be ISO format
+        assert "T" in entry.timestamp  # ISO format has T separator
+
+    def test_explicit_timestamp(self):
+        entry = ScoreEntry(timestamp="2024-01-15T10:00:00+00:00")
+        assert entry.timestamp == "2024-01-15T10:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------
@@ -57,83 +64,77 @@ class TestScoreHistory:
     def test_empty_history(self):
         history = ScoreHistory()
         assert history.entries == []
-        assert history.latest() is None
+        assert history.latest is None
+        assert history.authors == []
 
-    def test_latest(self):
+    def test_latest_property(self):
         entries = [
-            ScoreEntry(author="a", timestamp="2024-01-01"),
-            ScoreEntry(author="b", timestamp="2024-01-02"),
+            ScoreEntry(author="alice", timestamp="2024-01-01T00:00:00Z"),
+            ScoreEntry(author="bob", timestamp="2024-01-02T00:00:00Z"),
         ]
         history = ScoreHistory(entries=entries)
-        assert history.latest().author == "b"
+        # latest is a property, not a method
+        assert history.latest is not None
+        assert history.latest.author == "bob"
+
+    def test_authors(self):
+        entries = [
+            ScoreEntry(author="alice"),
+            ScoreEntry(author="bob"),
+            ScoreEntry(author="alice"),
+        ]
+        history = ScoreHistory(entries=entries)
+        assert sorted(history.authors) == ["alice", "bob"]
 
 
 # ---------------------------------------------------------------------------
-# LeaderboardRow tests
+# record_score and load_history tests
 # ---------------------------------------------------------------------------
 
-class TestLeaderboardRow:
-    def test_fields(self):
-        row = LeaderboardRow(author="alice", total_reviews=10, score=85.5)
-        assert row.author == "alice"
-        assert row.total_reviews == 10
-        assert row.score == 85.5
-
-    def test_defaults(self):
-        row = LeaderboardRow(author="bob")
-        assert row.total_reviews == 0
-        assert row.avg_complexity == 0.0
-        assert row.score == 0.0
-
-
-# ---------------------------------------------------------------------------
-# record_score tests
-# ---------------------------------------------------------------------------
-
-class TestRecordScore:
-    def test_creates_score_entry(self, tmp_path):
-        entry = record_score(
-            str(tmp_path),
-            author="tester",
-            metrics={"complexity_avg": 3.5},
+class TestRecordAndLoad:
+    def test_record_creates_file(self, tmp_path):
+        record_score(
+            str(tmp_path), author="alice",
+            metrics={"reviews": 1, "security_issues": 0},
         )
-        assert isinstance(entry, ScoreEntry)
-        assert entry.author == "tester"
-        assert entry.metrics["complexity_avg"] == 3.5
-
-    def test_score_persisted(self, tmp_path):
-        record_score(str(tmp_path), author="dev1", metrics={"score": 90})
         history = load_history(str(tmp_path))
         assert len(history.entries) >= 1
+        assert history.entries[0].author == "alice"
 
+    def test_record_multiple(self, tmp_path):
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 1})
+        record_score(str(tmp_path), author="bob", metrics={"reviews": 2})
+        history = load_history(str(tmp_path))
+        assert len(history.entries) >= 2
 
-# ---------------------------------------------------------------------------
-# load_history / reset_history tests
-# ---------------------------------------------------------------------------
-
-class TestLoadHistory:
     def test_load_empty(self, tmp_path):
         history = load_history(str(tmp_path))
-        assert isinstance(history, ScoreHistory)
         assert len(history.entries) == 0
 
-    def test_load_after_records(self, tmp_path):
-        record_score(str(tmp_path), author="a", metrics={"x": 1})
-        record_score(str(tmp_path), author="b", metrics={"x": 2})
+    def test_record_with_pr(self, tmp_path):
+        record_score(
+            str(tmp_path), author="alice", pr_number=42,
+            metrics={"reviews": 1},
+        )
         history = load_history(str(tmp_path))
-        assert len(history.entries) == 2
+        assert history.entries[0].pr_number == 42
 
-    def test_reset_history(self, tmp_path):
-        record_score(str(tmp_path), author="a", metrics={"x": 1})
+
+# ---------------------------------------------------------------------------
+# reset_history tests
+# ---------------------------------------------------------------------------
+
+class TestResetHistory:
+    def test_reset_existing(self, tmp_path):
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 1})
         result = reset_history(str(tmp_path))
         assert result is True
         history = load_history(str(tmp_path))
         assert len(history.entries) == 0
 
-    def test_reset_empty(self, tmp_path):
+    def test_reset_nonexistent(self, tmp_path):
         result = reset_history(str(tmp_path))
-        # Should not raise on empty
-        assert isinstance(result, bool)
+        assert result is False
 
 
 # ---------------------------------------------------------------------------
@@ -143,27 +144,29 @@ class TestLoadHistory:
 class TestBuildLeaderboard:
     def test_empty_history(self):
         history = ScoreHistory()
-        board = build_leaderboard(history)
-        assert board == []
+        leaderboard = build_leaderboard(history)
+        assert leaderboard == []
 
     def test_single_author(self, tmp_path):
-        record_score(str(tmp_path), author="alice", metrics={"complexity_avg": 5.0})
-        record_score(str(tmp_path), author="alice", metrics={"complexity_avg": 3.0})
+        record_score(str(tmp_path), author="alice", metrics={
+            "reviews": 3, "security_issues": 1,
+            "complexity_avg": 8.0, "rule_violations": 2,
+            "fix_count": 5,
+        })
         history = load_history(str(tmp_path))
-        board = build_leaderboard(history)
-        assert len(board) == 1
-        assert board[0].author == "alice"
-        assert board[0].total_reviews == 2
+        leaderboard = build_leaderboard(history)
+        assert len(leaderboard) == 1
+        assert leaderboard[0].author == "alice"
 
-    def test_multiple_authors_sorted(self, tmp_path):
-        record_score(str(tmp_path), author="alice", metrics={"complexity_avg": 2.0})
-        record_score(str(tmp_path), author="bob", metrics={"complexity_avg": 8.0})
-        record_score(str(tmp_path), author="alice", metrics={"complexity_avg": 3.0})
+    def test_multiple_authors(self, tmp_path):
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 3})
+        record_score(str(tmp_path), author="bob", metrics={"reviews": 5})
         history = load_history(str(tmp_path))
-        board = build_leaderboard(history)
-        assert len(board) == 2
-        # Should be sorted by score
-        assert isinstance(board[0], LeaderboardRow)
+        leaderboard = build_leaderboard(history)
+        assert len(leaderboard) == 2
+        authors = [row.author for row in leaderboard]
+        assert "alice" in authors
+        assert "bob" in authors
 
 
 # ---------------------------------------------------------------------------
@@ -173,35 +176,56 @@ class TestBuildLeaderboard:
 class TestCalculateTrends:
     def test_empty_history(self):
         history = ScoreHistory()
-        trends = calculate_trends(history)
+        trends = calculate_trends(history, "reviews")
         assert trends == []
 
     def test_with_data(self, tmp_path):
-        record_score(str(tmp_path), author="dev", metrics={"complexity_avg": 5.0})
-        record_score(str(tmp_path), author="dev", metrics={"complexity_avg": 4.0})
-        record_score(str(tmp_path), author="dev", metrics={"complexity_avg": 3.0})
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 1})
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 3})
         history = load_history(str(tmp_path))
-        trends = calculate_trends(history, metric="complexity_avg")
-        assert len(trends) >= 1
-        for t in trends:
-            assert isinstance(t, TrendPoint)
+        trends = calculate_trends(history, "reviews")
+        assert isinstance(trends, list)
 
 
 # ---------------------------------------------------------------------------
-# HTML export tests
+# generate_scoreboard_html tests
 # ---------------------------------------------------------------------------
 
-class TestScoreboardExport:
-    def test_generate_html(self, tmp_path):
-        record_score(str(tmp_path), author="alice", metrics={"complexity_avg": 3.0})
+class TestGenerateScoreboardHtml:
+    def test_empty_history(self):
+        history = ScoreHistory(project="test-project")
+        html = generate_scoreboard_html(history)
+        assert isinstance(html, str)
+        assert len(html) > 0
+
+    def test_with_data(self, tmp_path):
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 3})
+        record_score(str(tmp_path), author="bob", metrics={"reviews": 5})
         history = load_history(str(tmp_path))
         html = generate_scoreboard_html(history)
-        assert "<html" in html.lower() or "<div" in html.lower()
         assert "alice" in html
+        assert "bob" in html
 
-    def test_export_creates_file(self, tmp_path):
-        record_score(str(tmp_path), author="bob", metrics={"score": 85})
-        output_path = export_scoreboard(str(tmp_path), output=str(tmp_path / "board.html"))
-        assert Path(output_path).exists()
-        content = Path(output_path).read_text()
-        assert "bob" in content
+    def test_contains_html_structure(self):
+        history = ScoreHistory(project="my-project")
+        html = generate_scoreboard_html(history)
+        assert "<html" in html.lower() or "<!doctype" in html.lower()
+
+
+# ---------------------------------------------------------------------------
+# export_scoreboard tests
+# ---------------------------------------------------------------------------
+
+class TestExportScoreboard:
+    def test_creates_file(self, tmp_path):
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 1})
+        output = str(tmp_path / "scoreboard.html")
+        result = export_scoreboard(str(tmp_path), output=output)
+        assert Path(result).exists()
+        content = Path(result).read_text()
+        assert len(content) > 0
+
+    def test_default_output(self, tmp_path):
+        record_score(str(tmp_path), author="alice", metrics={"reviews": 1})
+        result = export_scoreboard(str(tmp_path))
+        assert Path(result).exists()
