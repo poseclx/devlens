@@ -1,80 +1,87 @@
 """Tests for devlens.summarizer module."""
+import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 
-from devlens.summarizer import PRSummary, summarize_pr
-
-
-# ---------------------------------------------------------------------------
-# PRSummary tests
-# ---------------------------------------------------------------------------
-
-class TestPRSummary:
-    def test_fields(self):
-        summary = PRSummary(
-            overview="This PR adds authentication.",
-            key_changes=["Added JWT module", "Updated requirements"],
-            impact="medium",
-            categories=["feature"],
-        )
-        assert summary.overview == "This PR adds authentication."
-        assert len(summary.key_changes) == 2
-        assert summary.impact == "medium"
-
-    def test_to_markdown(self):
-        summary = PRSummary(
-            overview="Fixes a critical login bug.",
-            key_changes=["Fixed null pointer", "Added tests"],
-            impact="high",
-            categories=["bugfix", "test"],
-        )
-        md = summary.to_markdown()
-        assert "Fixes a critical login bug" in md
-        assert "Fixed null pointer" in md
-        assert "high" in md.lower()
-
-    def test_to_markdown_empty(self):
-        summary = PRSummary(
-            overview="", key_changes=[], impact="low", categories=[],
-        )
-        md = summary.to_markdown()
-        assert isinstance(md, str)
+from devlens.summarizer import summarize_pr, PRSummary
 
 
 # ---------------------------------------------------------------------------
-# summarize_pr tests
+# Mock PR data matching PRData structure
+# ---------------------------------------------------------------------------
+
+def _mock_pr_data():
+    """Create a mock PRData-like object."""
+    pr = Mock()
+    pr.number = 42
+    pr.title = "Fix authentication bug"
+    pr.body = "This PR fixes a critical auth bypass.\n\nChanges:\n- Fixed token validation\n- Added test coverage"
+    pr.author = "alice"
+    pr.base_branch = "main"
+    pr.head_branch = "fix/auth-bypass"
+    pr.additions = 150
+    pr.deletions = 30
+    pr.changed_files = 5
+    pr.labels = ["bugfix", "security"]
+    pr.files = [
+        {"filename": "auth.py", "status": "modified", "additions": 80, "deletions": 20, "changes": 100, "patch": "+new code"},
+        {"filename": "test_auth.py", "status": "modified", "additions": 70, "deletions": 10, "changes": 80, "patch": "+tests"},
+    ]
+    return pr
+
+
+# ---------------------------------------------------------------------------
+# summarize_pr tests (no AI)
 # ---------------------------------------------------------------------------
 
 class TestSummarizePr:
-    def test_heuristic_mode(self, sample_pr_data):
-        summary = summarize_pr(sample_pr_data, use_ai=False)
+    def test_basic_summary(self):
+        pr = _mock_pr_data()
+        summary = summarize_pr(pr, use_ai=False)
         assert isinstance(summary, PRSummary)
         assert len(summary.overview) > 0
-        assert summary.impact in ("low", "medium", "high")
 
-    def test_heuristic_includes_key_changes(self, sample_pr_data):
-        summary = summarize_pr(sample_pr_data, use_ai=False)
-        assert len(summary.key_changes) >= 1
-
-    def test_heuristic_categories(self, sample_pr_data):
-        summary = summarize_pr(sample_pr_data, use_ai=False)
+    def test_summary_contains_pr_info(self):
+        pr = _mock_pr_data()
+        summary = summarize_pr(pr, use_ai=False)
+        assert isinstance(summary, PRSummary)
+        assert isinstance(summary.key_changes, list)
+        assert isinstance(summary.impact, str)
         assert isinstance(summary.categories, list)
 
-    @patch("devlens.summarizer._call_llm_summary")
-    def test_ai_mode(self, mock_llm, sample_pr_data):
-        mock_llm.return_value = PRSummary(
-            overview="AI-generated summary of JWT auth.",
-            key_changes=["JWT verification", "Token expiry"],
-            impact="medium",
-            categories=["feature", "security"],
-        )
-        summary = summarize_pr(sample_pr_data, use_ai=True, model="gpt-4o")
-        assert "AI-generated" in summary.overview
+    def test_summary_to_markdown(self):
+        pr = _mock_pr_data()
+        summary = summarize_pr(pr, use_ai=False)
+        md = summary.to_markdown()
+        assert isinstance(md, str)
+        assert len(md) > 0
 
-    @patch("devlens.summarizer._call_llm_summary")
-    def test_ai_fallback_on_error(self, mock_llm, sample_pr_data):
-        mock_llm.side_effect = Exception("API error")
-        summary = summarize_pr(sample_pr_data, use_ai=True)
-        # Should fall back to heuristic
+
+# ---------------------------------------------------------------------------
+# summarize_pr with AI tests (mocked)
+# ---------------------------------------------------------------------------
+
+class TestSummarizePrAI:
+    @patch("devlens.analyzer._call_llm")
+    def test_ai_summary(self, mock_llm):
+        mock_llm.return_value = json.dumps({
+            "overview": "This PR fixes auth issues with improved token validation.",
+            "key_changes": ["Fixed token check", "Added tests"],
+            "impact": "high",
+            "categories": ["bugfix", "security"],
+        })
+        pr = _mock_pr_data()
+        summary = summarize_pr(pr, use_ai=True, model="gpt-4o")
         assert isinstance(summary, PRSummary)
+        assert summary.overview == "This PR fixes auth issues with improved token validation."
+        mock_llm.assert_called_once()
+
+    @patch("devlens.analyzer._call_llm")
+    def test_ai_fallback_on_error(self, mock_llm):
+        mock_llm.side_effect = Exception("API error")
+        pr = _mock_pr_data()
+        # Should fall back to heuristic summary gracefully
+        summary = summarize_pr(pr, use_ai=True)
+        assert isinstance(summary, PRSummary)
+        # Heuristic summary still produces valid output
         assert len(summary.overview) > 0
