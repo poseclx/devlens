@@ -1,6 +1,6 @@
 """Tests for devlens.github module."""
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, Mock, MagicMock
 import os
 
 from devlens.github import PRData, fetch_pr
@@ -27,15 +27,37 @@ class TestPRData:
 
 
 class TestFetchPr:
-    def test_raises_without_token(self, monkeypatch):
+    @patch("devlens.github.httpx.Client")
+    def test_raises_on_404(self, mock_client_cls, monkeypatch):
+        """fetch_pr raises SystemExit when the API returns 404."""
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        with pytest.raises(EnvironmentError, match="GITHUB_TOKEN"):
+
+        # Build a mock client that returns a 404 response
+        mock_client = MagicMock()
+        mock_client_cls.return_value.__enter__ = Mock(return_value=mock_client)
+        mock_client_cls.return_value.__exit__ = Mock(return_value=False)
+
+        pr_resp = Mock()
+        pr_resp.status_code = 404
+        mock_client.get.return_value = pr_resp
+
+        with pytest.raises(SystemExit):
             fetch_pr("owner/repo", 1)
 
-    def test_parses_api_response(self, monkeypatch):
+    @patch("devlens.github.httpx.Client")
+    def test_parses_api_response(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
 
-        fake_pr = {
+        # Build mock client instance for context manager
+        mock_client = MagicMock()
+        mock_client_cls.return_value.__enter__ = Mock(return_value=mock_client)
+        mock_client_cls.return_value.__exit__ = Mock(return_value=False)
+
+        # PR response
+        pr_resp = Mock()
+        pr_resp.status_code = 200
+        pr_resp.raise_for_status = Mock()
+        pr_resp.json.return_value = {
             "number": 5,
             "title": "Fix bug",
             "body": "Fixes #4",
@@ -47,7 +69,12 @@ class TestFetchPr:
             "changed_files": 3,
             "labels": [{"name": "bugfix"}],
         }
-        fake_files = [
+
+        # Files response
+        files_resp = Mock()
+        files_resp.status_code = 200
+        files_resp.raise_for_status = Mock()
+        files_resp.json.return_value = [
             {
                 "filename": "app.py",
                 "status": "modified",
@@ -57,18 +84,10 @@ class TestFetchPr:
             }
         ]
 
-        with patch("devlens.github.httpx.get") as mock_get:
-            def side_effect(url, **kwargs):
-                resp = MagicMock()
-                resp.raise_for_status = MagicMock()
-                if "files" in url:
-                    resp.json.return_value = fake_files
-                else:
-                    resp.json.return_value = fake_pr
-                return resp
+        # First get() call -> PR data, second -> files
+        mock_client.get.side_effect = [pr_resp, files_resp]
 
-            mock_get.side_effect = side_effect
-            pr = fetch_pr("owner/repo", 5)
+        pr = fetch_pr("owner/repo", 5)
 
         assert pr.number == 5
         assert pr.title == "Fix bug"
