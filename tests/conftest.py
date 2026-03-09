@@ -379,3 +379,230 @@ def mock_osv_response():
             }
         ]
     }
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for new test modules (Batch 1-4)
+# ---------------------------------------------------------------------------
+
+SAMPLE_MARKDOWN = '''\
+# Sample Project
+
+## Installation
+
+```bash
+pip install sample-project
+```
+
+## Usage
+
+```python
+from sample import hello
+hello("world")
+```
+
+## API
+
+```python
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+```
+
+## Broken Example
+
+```python
+from nonexistent_module import magic
+magic.do_stuff()
+```
+'''
+
+SAMPLE_DEVLENSIGNORE = '''\
+# DevLens ignore patterns
+*.min.js
+node_modules/
+__pycache__/
+*.pyc
+dist/
+build/
+!important.min.js
+*.log
+vendor/**/*.go
+'''
+
+SAMPLE_JAVASCRIPT = '''\
+function fibonacci(n) {
+    if (n <= 0) return 0;
+    if (n === 1) return 1;
+    let a = 0, b = 1;
+    for (let i = 2; i <= n; i++) {
+        const temp = a + b;
+        a = b;
+        b = temp;
+    }
+    return b;
+}
+
+module.exports = { fibonacci };
+'''
+
+SAMPLE_TYPESCRIPT = '''\
+interface User {
+    id: number;
+    name: string;
+    email: string;
+}
+
+function validateUser(user: User): boolean {
+    if (!user.id || user.id <= 0) {
+        return false;
+    }
+    if (!user.name || user.name.trim().length === 0) {
+        return false;
+    }
+    if (!user.email || !user.email.includes("@")) {
+        return false;
+    }
+    return true;
+}
+
+export { validateUser, User };
+'''
+
+
+@pytest.fixture
+def tmp_markdown_file(tmp_path):
+    """Create a temporary Markdown file with code examples."""
+    p = tmp_path / "README.md"
+    p.write_text(SAMPLE_MARKDOWN)
+    return p
+
+
+@pytest.fixture
+def tmp_broken_markdown_file(tmp_path):
+    """Create a Markdown file with intentionally broken code blocks."""
+    p = tmp_path / "broken.md"
+    p.write_text(SAMPLE_MARKDOWN)  # contains broken import at the end
+    return p
+
+
+@pytest.fixture
+def tmp_devlensignore(tmp_path):
+    """Create a .devlensignore file with common patterns."""
+    p = tmp_path / ".devlensignore"
+    p.write_text(SAMPLE_DEVLENSIGNORE)
+    return p
+
+
+@pytest.fixture
+def tmp_js_file(tmp_path):
+    """Create a temporary JavaScript file."""
+    p = tmp_path / "fibonacci.js"
+    p.write_text(SAMPLE_JAVASCRIPT)
+    return p
+
+
+@pytest.fixture
+def tmp_ts_file(tmp_path):
+    """Create a temporary TypeScript file."""
+    p = tmp_path / "user.ts"
+    p.write_text(SAMPLE_TYPESCRIPT)
+    return p
+
+
+@pytest.fixture
+def tmp_multi_lang_project(tmp_path):
+    """Create a project with multiple language files for cross-language tests."""
+    # Python
+    py_dir = tmp_path / "src" / "python"
+    py_dir.mkdir(parents=True)
+    (py_dir / "main.py").write_text(SIMPLE_PYTHON)
+    (py_dir / "complex.py").write_text(COMPLEX_PYTHON)
+
+    # JavaScript
+    js_dir = tmp_path / "src" / "js"
+    js_dir.mkdir(parents=True)
+    (js_dir / "fibonacci.js").write_text(SAMPLE_JAVASCRIPT)
+
+    # TypeScript
+    ts_dir = tmp_path / "src" / "ts"
+    ts_dir.mkdir(parents=True)
+    (ts_dir / "user.ts").write_text(SAMPLE_TYPESCRIPT)
+
+    # Config files
+    (tmp_path / "requirements.txt").write_text("requests==2.31.0\n")
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "test-multi",
+        "dependencies": {"express": "4.18.2"},
+    }))
+    (tmp_path / ".devlensignore").write_text(SAMPLE_DEVLENSIGNORE)
+
+    return tmp_path
+
+
+@pytest.fixture
+def mock_ai_response():
+    """Fake AI/LLM response for testing AI-dependent modules without API calls."""
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps({
+                        "summary": "Test AI review summary",
+                        "findings": [
+                            {
+                                "file": "test.py",
+                                "line": 10,
+                                "severity": "medium",
+                                "message": "Consider using a context manager",
+                                "suggestion": "Use 'with' statement",
+                            }
+                        ],
+                        "score": 7.5,
+                        "grade": "B",
+                    })
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 500, "completion_tokens": 200, "total_tokens": 700},
+    }
+
+
+@pytest.fixture
+def sample_security_findings():
+    """Pre-built security findings for test_security.py and test_commenter.py."""
+    return [
+        {
+            "id": "SEC-001",
+            "title": "SQL Injection Risk",
+            "severity": "critical",
+            "file": "app/db.py",
+            "line": 42,
+            "message": "String formatting in SQL query",
+            "suggestion": "Use parameterized queries",
+            "category": "security",
+            "cwe": "CWE-89",
+        },
+        {
+            "id": "SEC-002",
+            "title": "Hardcoded API Key",
+            "severity": "high",
+            "file": "config/settings.py",
+            "line": 15,
+            "message": "API key found in source code",
+            "suggestion": "Use environment variables or a secrets manager",
+            "category": "security",
+            "cwe": "CWE-798",
+        },
+        {
+            "id": "SEC-003",
+            "title": "Insecure deserialization",
+            "severity": "high",
+            "file": "utils/serializer.py",
+            "line": 8,
+            "message": "pickle.loads on untrusted data",
+            "suggestion": "Use json.loads or a safe deserializer",
+            "category": "security",
+            "cwe": "CWE-502",
+        },
+    ]
