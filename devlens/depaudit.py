@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -277,7 +278,7 @@ def audit_dependencies(path: str) -> AuditReport:
     all_vulns: list[Vulnerability] = []
 
     for dep in deps:
-        raw = _query_osv(dep)
+        raw = sys.modules[__name__]._query_osv(dep)
         if raw:
             all_vulns.extend(_vulns_from_osv(raw, dep))
 
