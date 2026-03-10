@@ -13,7 +13,7 @@ Supports Python files. Other languages use heuristic line-counting.
 from __future__ import annotations
 
 import ast
-import os
+from typing import Any
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +39,7 @@ class FunctionMetrics:
             return "medium"
         return "low"
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "file": self.file,
@@ -127,7 +127,7 @@ class ComplexityReport:
         penalty = high * 5
         return max(0, min(100, int(base - penalty)))
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "grade": self.grade,
             "score": self.score,
@@ -370,7 +370,7 @@ def analyze_path(
     return ComplexityReport(files=files)
 
 
-def analyze_pr_complexity(pr_data, extensions: tuple[str, ...] = (".py",)) -> ComplexityReport:
+def analyze_pr_complexity(pr_data: Any, extensions: tuple[str, ...] = (".py",)) -> ComplexityReport:
     """Analyze complexity of files changed in a PR.
     
     Only looks at the final state of changed files (added lines).
