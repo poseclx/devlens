@@ -162,7 +162,7 @@ mock_scoreboard = MagicMock(name="devlens.scoreboard")
 mock_ai_review = MagicMock(name="devlens.ai_review")
 mock_fixer = MagicMock(name="devlens.fixer")
 
-# Save original sys.modules entries so we can restore them after tests
+# List of modules that will be patched in setup_module()
 _MOCKED_MODULES = [
     "lsprotocol", "lsprotocol.types",
     "pygls", "pygls.lsp", "pygls.lsp.server", "pygls.workspace",
@@ -170,42 +170,81 @@ _MOCKED_MODULES = [
     "devlens.depaudit", "devlens.rules", "devlens.scoreboard",
     "devlens.ai_review", "devlens.fixer", "devlens.language_server",
 ]
-_saved_modules = {k: sys.modules[k] for k in _MOCKED_MODULES if k in sys.modules}
+_saved_modules: dict = {}
 
-# Patch sys.modules so `from devlens.xxx import ...` works
-sys.modules["lsprotocol"] = MagicMock()
-sys.modules["lsprotocol.types"] = mock_lsp
-sys.modules["pygls"] = mock_pygls
-sys.modules["pygls.lsp"] = mock_pygls_lsp
-sys.modules["pygls.lsp.server"] = mock_pygls_server
-sys.modules["pygls.workspace"] = mock_pygls_workspace
-sys.modules["devlens"] = mock_devlens
-sys.modules["devlens.cache"] = mock_cache
-sys.modules["devlens.complexity"] = mock_complexity
-sys.modules["devlens.config"] = mock_config
-sys.modules["devlens.depaudit"] = mock_depaudit
-sys.modules["devlens.rules"] = mock_rules
-sys.modules["devlens.scoreboard"] = mock_scoreboard
-sys.modules["devlens.ai_review"] = mock_ai_review
-sys.modules["devlens.fixer"] = mock_fixer
+# Forward declarations -- populated by setup_module() before any test runs.
+_finding_to_diagnostic = None
+_score_to_grade = None
+DevLensLanguageServer = None
+create_server = None
+start_server = None
+_build_server_capabilities = None
+SEVERITY_MAP = None
+DIAGNOSTIC_SOURCE = None
+DIAGNOSTIC_TAGS = None
+HAS_AI = None
+HAS_FIXER = None
 
-# =========================================================================
-# NOW import the module under test
-# =========================================================================
 
-from devlens.language_server import (  # noqa: E402
-    _finding_to_diagnostic,
-    _score_to_grade,
-    DevLensLanguageServer,
-    create_server,
-    start_server,
-    _build_server_capabilities,
-    SEVERITY_MAP,
-    DIAGNOSTIC_SOURCE,
-    DIAGNOSTIC_TAGS,
-    HAS_AI,
-    HAS_FIXER,
-)
+def setup_module(module):
+    """Patch sys.modules and import devlens.language_server BEFORE tests run.
+
+    This runs after collection but before the first test in this file,
+    so other test modules that were collected earlier keep their real imports.
+    """
+    global _saved_modules
+    global _finding_to_diagnostic, _score_to_grade, DevLensLanguageServer
+    global create_server, start_server, _build_server_capabilities
+    global SEVERITY_MAP, DIAGNOSTIC_SOURCE, DIAGNOSTIC_TAGS
+    global HAS_AI, HAS_FIXER
+
+    # Save originals so teardown_module can restore them
+    _saved_modules = {k: sys.modules[k] for k in _MOCKED_MODULES if k in sys.modules}
+
+    # Patch sys.modules so `from devlens.xxx import ...` resolves to our mocks
+    sys.modules["lsprotocol"] = MagicMock()
+    sys.modules["lsprotocol.types"] = mock_lsp
+    sys.modules["pygls"] = mock_pygls
+    sys.modules["pygls.lsp"] = mock_pygls_lsp
+    sys.modules["pygls.lsp.server"] = mock_pygls_server
+    sys.modules["pygls.workspace"] = mock_pygls_workspace
+    sys.modules["devlens"] = mock_devlens
+    sys.modules["devlens.cache"] = mock_cache
+    sys.modules["devlens.complexity"] = mock_complexity
+    sys.modules["devlens.config"] = mock_config
+    sys.modules["devlens.depaudit"] = mock_depaudit
+    sys.modules["devlens.rules"] = mock_rules
+    sys.modules["devlens.scoreboard"] = mock_scoreboard
+    sys.modules["devlens.ai_review"] = mock_ai_review
+    sys.modules["devlens.fixer"] = mock_fixer
+
+    # NOW import the module under test (with mocked dependencies in place)
+    from devlens.language_server import (
+        _finding_to_diagnostic as ftd,
+        _score_to_grade as stg,
+        DevLensLanguageServer as DLLS,
+        create_server as cs,
+        start_server as ss,
+        _build_server_capabilities as bsc,
+        SEVERITY_MAP as sm,
+        DIAGNOSTIC_SOURCE as ds,
+        DIAGNOSTIC_TAGS as dt,
+        HAS_AI as ha,
+        HAS_FIXER as hf,
+    )
+
+    # Populate module globals so all test classes/functions can use them
+    module._finding_to_diagnostic = ftd
+    module._score_to_grade = stg
+    module.DevLensLanguageServer = DLLS
+    module.create_server = cs
+    module.start_server = ss
+    module._build_server_capabilities = bsc
+    module.SEVERITY_MAP = sm
+    module.DIAGNOSTIC_SOURCE = ds
+    module.DIAGNOSTIC_TAGS = dt
+    module.HAS_AI = ha
+    module.HAS_FIXER = hf
 
 # =========================================================================
 # Helpers & fixtures
@@ -1372,7 +1411,7 @@ class TestScoreToGradeParametrized:
 # =========================================================================
 
 def teardown_module(module):
-    """Restore sys.modules entries that were patched at module level."""
+    """Restore sys.modules entries that were patched in setup_module."""
     for key in _MOCKED_MODULES:
         if key in _saved_modules:
             sys.modules[key] = _saved_modules[key]
