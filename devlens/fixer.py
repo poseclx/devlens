@@ -210,7 +210,7 @@ def _ai_fix(finding, file_contents: dict[str, str], model: str) -> FixSuggestion
     prompt = FIX_PROMPT.format(
         title=finding.title,
         rule_id=finding.rule_id,
-        severity=finding.severity.value,
+        severity=getattr(finding.severity, 'value', finding.severity),
         file=finding.file,
         line=finding.line or "?",
         description=finding.description,
