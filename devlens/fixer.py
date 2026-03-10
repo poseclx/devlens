@@ -10,9 +10,10 @@ Usage:
 
 from __future__ import annotations
 
+from typing import Any
+
 import json
-import textwrap
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -28,7 +29,7 @@ class FixSuggestion:
     confidence: str = "medium"  # low | medium | high
     auto_applicable: bool = False  # Can be applied without review?
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "finding_id": self.finding_id,
             "file": self.file,
@@ -52,7 +53,7 @@ class FixSuggestion:
 
 # ── Rule-based fix templates ─────────────────────────────────
 
-RULE_FIXES: dict[str, dict] = {
+RULE_FIXES: dict[str, dict[str, Any]] = {
     "SEC001": {
         "title": "Remove hardcoded AWS key",
         "template": 'Replace with: `os.environ.get("AWS_ACCESS_KEY_ID")`',
@@ -182,13 +183,11 @@ def _get_file_context(file_contents: dict[str, str], filepath: str, line: int | 
     return "\n".join(context_lines)
 
 
-def _rule_based_fix(finding, file_contents: dict[str, str]) -> FixSuggestion | None:
+def _rule_based_fix(finding: Any, file_contents: dict[str, str]) -> FixSuggestion | None:
     """Generate a fix suggestion using predefined templates."""
     rule = RULE_FIXES.get(finding.rule_id)
     if not rule:
         return None
-    
-    context = _get_file_context(file_contents, finding.file, finding.line)
     
     return FixSuggestion(
         finding_id=finding.rule_id,
@@ -203,7 +202,7 @@ def _rule_based_fix(finding, file_contents: dict[str, str]) -> FixSuggestion | N
     )
 
 
-def _ai_fix(finding, file_contents: dict[str, str], model: str) -> FixSuggestion | None:
+def _ai_fix(finding: Any, file_contents: dict[str, str], model: str) -> FixSuggestion | None:
     """Generate fix using LLM."""
     context = _get_file_context(file_contents, finding.file, finding.line)
     
@@ -243,7 +242,7 @@ def _ai_fix(finding, file_contents: dict[str, str], model: str) -> FixSuggestion
 
 
 def suggest_fixes(
-    findings: list,
+    findings: list[Any],
     file_contents: dict[str, str] | None = None,
     *,
     use_ai: bool = False,
