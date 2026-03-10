@@ -1,16 +1,21 @@
-"""AST-based complexity analysis for Python source files."""
+"""Complexity analyzer — measures code complexity metrics using Python AST.
+
+Analyzes:
+  - Cyclomatic complexity (decision points per function)
+  - Function length (lines of code)
+  - Nesting depth (max indentation level)
+  - Cognitive complexity (weighted by nesting)
+  - Module-level summary with grade
+
+Supports Python files. Other languages use heuristic line-counting.
+"""
 
 from __future__ import annotations
 
 import ast
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from devlens.github import PRData
 
 
 @dataclass
@@ -20,17 +25,17 @@ class FunctionMetrics:
     file: str
     line: int
     end_line: int
-    length: int
-    cyclomatic: int
-    max_nesting: int
-    cognitive: int = 0
-    params: int = 0
+    length: int                    # lines of code
+    cyclomatic: int = 1            # cyclomatic complexity (starts at 1)
+    max_nesting: int = 0           # deepest nesting level
+    cognitive: int = 0             # cognitive complexity score
+    params: int = 0                # number of parameters
 
     @property
     def risk(self) -> str:
-        if self.cyclomatic > 20 or self.length > 100 or self.max_nesting >= 7:
+        if self.cyclomatic > 20 or self.length > 100 or self.max_nesting > 6:
             return "high"
-        if self.cyclomatic > 10 or self.length > 50 or self.max_nesting >= 5:
+        if self.cyclomatic > 10 or self.length > 50 or self.max_nesting > 4:
             return "medium"
         return "low"
 
@@ -64,9 +69,7 @@ class FileComplexity:
 
     @property
     def max_cyclomatic(self) -> int:
-        if not self.functions:
-            return 0
-        return max(f.cyclomatic for f in self.functions)
+        return max((f.cyclomatic for f in self.functions), default=0)
 
     @property
     def high_risk_functions(self) -> list[FunctionMetrics]:
@@ -77,312 +80,315 @@ class FileComplexity:
         return [f for f in self.functions if f.risk == "medium"]
 
 
-@dataclass
+@dataclass 
 class ComplexityReport:
-    """Aggregated complexity report across multiple files."""
+    """Aggregate complexity report for a project or PR."""
     files: list[FileComplexity] = field(default_factory=list)
 
     @property
-    def _all_functions(self) -> list[FunctionMetrics]:
-        funcs: list[FunctionMetrics] = []
-        for fc in self.files:
-            funcs.extend(fc.functions)
-        return funcs
-
-    @property
     def total_functions(self) -> int:
-        return len(self._all_functions)
+        return sum(len(f.functions) for f in self.files)
 
     @property
     def high_risk_count(self) -> int:
-        return sum(1 for f in self._all_functions if f.risk == "high")
+        return sum(len(f.high_risk_functions) for f in self.files)
 
     @property
     def medium_risk_count(self) -> int:
-        return sum(1 for f in self._all_functions if f.risk == "medium")
+        return sum(len(f.medium_risk_functions) for f in self.files)
 
     @property
     def avg_cyclomatic(self) -> float:
-        funcs = self._all_functions
-        if not funcs:
+        all_funcs = [fn for f in self.files for fn in f.functions]
+        if not all_funcs:
             return 0.0
-        return sum(f.cyclomatic for f in funcs) / len(funcs)
-
-    @property
-    def score(self) -> int:
-        """Compute a 0-100 quality score."""
-        if not self._all_functions:
-            return 100
-        funcs = self._all_functions
-        avg_cc = self.avg_cyclomatic
-        high_pct = self.high_risk_count / len(funcs)
-        med_pct = self.medium_risk_count / len(funcs)
-
-        s = 100.0
-        s -= avg_cc * 1.5
-        s -= high_pct * 5
-        s -= med_pct * 2
-        s -= max(0, avg_cc - 20) ** 2 * 0.6
-        return max(0, min(100, int(s)))
+        return sum(fn.cyclomatic for fn in all_funcs) / len(all_funcs)
 
     @property
     def grade(self) -> str:
-        s = self.score
-        if s >= 90:
+        avg = self.avg_cyclomatic
+        high = self.high_risk_count
+        if avg <= 5 and high == 0:
             return "A"
-        if s >= 80:
+        if avg <= 10 and high <= 2:
             return "B"
-        if s >= 70:
+        if avg <= 15 and high <= 5:
             return "C"
-        if s >= 60:
+        if avg <= 20:
             return "D"
         return "F"
+
+    @property
+    def score(self) -> int:
+        """0-100 complexity score (higher = simpler code)."""
+        avg = self.avg_cyclomatic
+        high = self.high_risk_count
+        base = max(0, 100 - avg * 4)
+        penalty = high * 5
+        return max(0, min(100, int(base - penalty)))
 
     def to_dict(self) -> dict:
         return {
             "grade": self.grade,
             "score": self.score,
             "total_functions": self.total_functions,
+            "high_risk": self.high_risk_count,
+            "medium_risk": self.medium_risk_count,
+            "avg_cyclomatic": round(self.avg_cyclomatic, 1),
             "files": [
                 {
-                    "file": fc.file,
-                    "total_lines": fc.total_lines,
-                    "code_lines": fc.code_lines,
-                    "functions": [fn.to_dict() for fn in fc.functions],
+                    "file": f.file,
+                    "total_lines": f.total_lines,
+                    "code_lines": f.code_lines,
+                    "functions": [fn.to_dict() for fn in f.functions],
                 }
-                for fc in self.files
+                for f in self.files
             ],
         }
 
     def to_markdown(self) -> str:
-        lines: list[str] = []
-        lines.append("# Complexity Report")
-        lines.append("")
-        lines.append(f"**Grade:** {self.grade} | **Score:** {self.score}/100")
-        lines.append(f"**Total functions:** {self.total_functions}")
-        lines.append("")
+        lines = [
+            f"# Complexity Report — Grade: {self.grade} ({self.score}/100)\n",
+            f"**Functions:** {self.total_functions} | "
+            f"**Avg Complexity:** {self.avg_cyclomatic:.1f} | "
+            f"**High Risk:** {self.high_risk_count} | "
+            f"**Medium Risk:** {self.medium_risk_count}\n",
+        ]
 
-        high = [f for f in self._all_functions if f.risk == "high"]
-        if high:
-            lines.append("## High Risk Functions")
-            lines.append("")
+        # High risk functions table
+        high_risk = [(fn, f.file) for f in self.files for fn in f.high_risk_functions]
+        if high_risk:
+            lines.append("## High Risk Functions\n")
             lines.append("| Function | File | Cyclomatic | Length | Nesting |")
             lines.append("|----------|------|-----------|--------|---------|")
-            for fn in high:
+            for fn, _ in sorted(high_risk, key=lambda x: x[0].cyclomatic, reverse=True):
                 lines.append(
-                    f"| {fn.name} | {fn.file} | {fn.cyclomatic} | {fn.length} | {fn.max_nesting} |"
+                    f"| `{fn.name}` | `{fn.file}:{fn.line}` | "
+                    f"{fn.cyclomatic} | {fn.length} | {fn.max_nesting} |"
                 )
             lines.append("")
 
-        medium = [f for f in self._all_functions if f.risk == "medium"]
-        if medium:
-            lines.append("## Medium Risk Functions")
-            lines.append("")
+        # Medium risk
+        med_risk = [(fn, f.file) for f in self.files for fn in f.medium_risk_functions]
+        if med_risk:
+            lines.append("## Medium Risk Functions\n")
             lines.append("| Function | File | Cyclomatic | Length | Nesting |")
             lines.append("|----------|------|-----------|--------|---------|")
-            for fn in medium:
+            for fn, _ in sorted(med_risk, key=lambda x: x[0].cyclomatic, reverse=True)[:15]:
                 lines.append(
-                    f"| {fn.name} | {fn.file} | {fn.cyclomatic} | {fn.length} | {fn.max_nesting} |"
+                    f"| `{fn.name}` | `{fn.file}:{fn.line}` | "
+                    f"{fn.cyclomatic} | {fn.length} | {fn.max_nesting} |"
                 )
+            if len(med_risk) > 15:
+                lines.append(f"| ... | +{len(med_risk) - 15} more | | | |")
             lines.append("")
 
         return "\n".join(lines)
 
 
-# ── AST analysis helpers ─────────────────────────────────────
+# ── AST-based Python analysis ────────────────────────────────
+
+# Nodes that add a decision point (cyclomatic complexity)
+_DECISION_NODES = (
+    ast.If, ast.IfExp,                    # if / ternary
+    ast.For, ast.AsyncFor,                # for loops
+    ast.While,                            # while loops
+    ast.ExceptHandler,                    # except clauses
+    ast.With, ast.AsyncWith,              # context managers
+    ast.Assert,                           # assertions
+    ast.BoolOp,                           # and/or chains
+)
 
 
-class _CyclomaticVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.complexity = 1
+class _ComplexityVisitor(ast.NodeVisitor):
+    """AST visitor that computes complexity metrics for each function."""
 
-    def visit_If(self, node):
-        self.complexity += 1
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+        self.functions: list[FunctionMetrics] = []
+        self._current_nesting = 0
+
+    def _analyze_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> FunctionMetrics:
+        name = node.name
+        line = node.lineno
+        end_line = node.end_lineno or line
+        length = end_line - line + 1
+
+        # Count parameters
+        args = node.args
+        params = (
+            len(args.posonlyargs) + len(args.args) + len(args.kwonlyargs)
+            + (1 if args.vararg else 0) + (1 if args.kwarg else 0)
+        )
+        # Subtract 'self' / 'cls'
+        if args.args and args.args[0].arg in ("self", "cls"):
+            params -= 1
+
+        # Cyclomatic complexity
+        cyclomatic = 1  # base complexity
+        for child in ast.walk(node):
+            if isinstance(child, _DECISION_NODES):
+                cyclomatic += 1
+            # Count boolean operators (each 'and'/'or' adds a path)
+            if isinstance(child, ast.BoolOp):
+                cyclomatic += len(child.values) - 1
+
+        # Max nesting depth
+        max_nesting = self._compute_nesting(node)
+
+        # Cognitive complexity (simplified: cyclomatic * nesting weight)
+        cognitive = self._compute_cognitive(node)
+
+        return FunctionMetrics(
+            name=name, file=self.filepath, line=line, end_line=end_line,
+            length=length, cyclomatic=cyclomatic, max_nesting=max_nesting,
+            cognitive=cognitive, params=params,
+        )
+
+    def _compute_nesting(self, node: ast.AST, depth: int = 0) -> int:
+        """Compute maximum nesting depth inside a function."""
+        max_depth = depth
+        nesting_nodes = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With,
+                         ast.AsyncWith, ast.Try, ast.ExceptHandler)
+
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, nesting_nodes):
+                child_depth = self._compute_nesting(child, depth + 1)
+                max_depth = max(max_depth, child_depth)
+            else:
+                child_depth = self._compute_nesting(child, depth)
+                max_depth = max(max_depth, child_depth)
+
+        return max_depth
+
+    def _compute_cognitive(self, node: ast.AST, nesting: int = 0) -> int:
+        """Compute cognitive complexity (increments weighted by nesting)."""
+        total = 0
+        incrementing = (ast.If, ast.IfExp, ast.For, ast.AsyncFor, ast.While,
+                        ast.ExceptHandler)
+
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, incrementing):
+                total += 1 + nesting  # base increment + nesting penalty
+                total += self._compute_cognitive(child, nesting + 1)
+            elif isinstance(child, ast.BoolOp):
+                total += 1  # each boolean sequence
+                total += self._compute_cognitive(child, nesting)
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Nested function — adds structural complexity
+                total += 1 + nesting
+                total += self._compute_cognitive(child, nesting + 1)
+            else:
+                total += self._compute_cognitive(child, nesting)
+
+        return total
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.functions.append(self._analyze_function(node))
         self.generic_visit(node)
 
-    def visit_For(self, node):
-        self.complexity += 1
-        self.generic_visit(node)
-
-    def visit_While(self, node):
-        self.complexity += 1
-        self.generic_visit(node)
-
-    def visit_ExceptHandler(self, node):
-        self.complexity += 1
-        self.generic_visit(node)
-
-    def visit_With(self, node):
-        self.complexity += 1
-        self.generic_visit(node)
-
-    def visit_BoolOp(self, node):
-        self.complexity += len(node.values) - 1
-        self.generic_visit(node)
-
-    def visit_IfExp(self, node):
-        self.complexity += 1
-        self.generic_visit(node)
-
-    def visit_comprehension(self, node):
-        self.complexity += 1
-        self.complexity += len(node.ifs)
-        self.generic_visit(node)
-
-    def visit_Assert(self, node):
-        self.complexity += 1
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.functions.append(self._analyze_function(node))
         self.generic_visit(node)
 
 
-class _NestingVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.max_nesting = 0
-        self._current = 0
-
-    def _visit_nesting(self, node):
-        self._current += 1
-        self.max_nesting = max(self.max_nesting, self._current)
-        self.generic_visit(node)
-        self._current -= 1
-
-    def visit_If(self, node):
-        self._visit_nesting(node)
-
-    def visit_For(self, node):
-        self._visit_nesting(node)
-
-    def visit_While(self, node):
-        self._visit_nesting(node)
-
-    def visit_With(self, node):
-        self._visit_nesting(node)
-
-    def visit_Try(self, node):
-        self._visit_nesting(node)
-
-    def visit_ExceptHandler(self, node):
-        self._visit_nesting(node)
-
-
-def _count_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
-    args = node.args
-    all_args = list(args.args) + list(args.posonlyargs) + list(args.kwonlyargs)
-    count = len(all_args)
-    if all_args and all_args[0].arg in ("self", "cls"):
-        count -= 1
-    if args.vararg:
-        count += 1
-    if args.kwarg:
-        count += 1
-    return count
-
-
-def _analyze_function(node: ast.FunctionDef | ast.AsyncFunctionDef, filepath: str) -> FunctionMetrics:
-    cc_visitor = _CyclomaticVisitor()
-    cc_visitor.visit(node)
-    nesting_visitor = _NestingVisitor()
-    nesting_visitor.visit(node)
-    end_line = node.end_lineno or node.lineno
-    length = end_line - node.lineno + 1
-    return FunctionMetrics(
-        name=node.name,
-        file=filepath,
-        line=node.lineno,
-        end_line=end_line,
-        length=length,
-        cyclomatic=cc_visitor.complexity,
-        max_nesting=nesting_visitor.max_nesting,
-        cognitive=0,
-        params=_count_params(node),
-    )
-
-
-def analyze_file(path: str, content: str | None = None) -> FileComplexity:
-    """Analyze a single file for complexity."""
+def analyze_file(filepath: str, content: str | None = None) -> FileComplexity:
+    """Analyze complexity of a single Python file."""
     if content is None:
-        try:
-            content = Path(path).read_text(errors="ignore")
-        except (OSError, IOError):
-            return FileComplexity(file=path, total_lines=0, code_lines=0, functions=[])
+        content = Path(filepath).read_text(errors="ignore")
 
-    if not content:
-        return FileComplexity(file=path, total_lines=0, code_lines=0, functions=[])
-
-    lines = content.splitlines()
-    total_lines = len(lines)
+    total_lines = len(content.splitlines())
     code_lines = sum(
-        1 for line in lines
+        1 for line in content.splitlines()
         if line.strip() and not line.strip().startswith("#")
     )
 
-    if not path.endswith(".py"):
-        return FileComplexity(file=path, total_lines=total_lines, code_lines=code_lines, functions=[])
-
-    try:
-        tree = ast.parse(content, filename=path)
-    except SyntaxError:
-        return FileComplexity(file=path, total_lines=total_lines, code_lines=code_lines, functions=[])
-
     functions: list[FunctionMetrics] = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            functions.append(_analyze_function(node, path))
+
+    if filepath.endswith(".py"):
+        try:
+            tree = ast.parse(content)
+            visitor = _ComplexityVisitor(filepath)
+            visitor.visit(tree)
+            functions = visitor.functions
+        except SyntaxError:
+            pass  # Can't parse — skip function analysis
+    else:
+        # Heuristic for non-Python files: count lines only
+        pass
 
     return FileComplexity(
-        file=path, total_lines=total_lines, code_lines=code_lines, functions=functions,
+        file=filepath,
+        total_lines=total_lines,
+        code_lines=code_lines,
+        functions=functions,
     )
 
 
 def analyze_path(
     path: str,
-    extensions: tuple[str, ...] | None = None,
+    *,
+    extensions: tuple[str, ...] = (".py",),
     ignore_patterns: list[str] | None = None,
 ) -> ComplexityReport:
-    """Analyze a file or directory for complexity."""
-    p = Path(path)
-    if extensions is None:
-        extensions = (".py",)
+    """Analyze complexity of all matching files in a directory."""
+    import re
 
-    if p.is_file():
-        fc = analyze_file(str(p))
-        return ComplexityReport(files=[fc])
-
+    root = Path(path)
     files: list[FileComplexity] = []
-    for root, dirs, filenames in os.walk(str(p)):
-        dirs[:] = [d for d in dirs if d != "__pycache__" and not d.startswith(".")]
-        for fname in filenames:
-            fpath = os.path.join(root, fname)
-            if not any(fname.endswith(ext) for ext in extensions):
-                continue
-            if ignore_patterns:
-                skip = False
-                for pattern in ignore_patterns:
-                    if re.search(pattern, fpath):
-                        skip = True
-                        break
-                if skip:
-                    continue
-            fc = analyze_file(fpath)
+    ignore = ignore_patterns or []
+
+    if root.is_file():
+        return ComplexityReport(files=[analyze_file(str(root))])
+
+    for fp in sorted(root.rglob("*")):
+        if not fp.is_file():
+            continue
+        if not any(fp.name.endswith(ext) for ext in extensions):
+            continue
+        
+        rel = str(fp.relative_to(root))
+        
+        # Skip common non-source dirs
+        skip_dirs = {"__pycache__", ".git", "node_modules", ".venv", "venv", 
+                     "dist", "build", ".egg-info", ".tox", ".mypy_cache"}
+        if any(part in skip_dirs for part in fp.parts):
+            continue
+
+        if ignore and any(re.search(p, rel) for p in ignore):
+            continue
+
+        if fp.stat().st_size > 500_000:
+            continue
+
+        try:
+            fc = analyze_file(rel, fp.read_text(errors="ignore"))
             files.append(fc)
+        except Exception:
+            continue
 
     return ComplexityReport(files=files)
 
 
-def analyze_pr_complexity(pr_data: "PRData") -> ComplexityReport:
-    """Analyze complexity of changed files in a PR."""
-    file_results: list[FileComplexity] = []
+def analyze_pr_complexity(pr_data, extensions: tuple[str, ...] = (".py",)) -> ComplexityReport:
+    """Analyze complexity of files changed in a PR.
+    
+    Only looks at the final state of changed files (added lines).
+    """
+    files: list[FileComplexity] = []
 
     for f in pr_data.files:
-        filename = f.get("filename", "") if isinstance(f, dict) else getattr(f, "filename", "")
-        patch = f.get("patch", "") if isinstance(f, dict) else getattr(f, "patch", "")
-
-        if not filename.endswith(".py"):
-            continue
-        if not patch or not patch.strip():
+        filename = f["filename"]
+        if not any(filename.endswith(ext) for ext in extensions):
             continue
 
+        patch = f.get("patch", "")
+        if not patch:
+            continue
+
+        # Extract only added lines to form pseudo-file content
         added_lines = []
-        for line in patch.splitlines():
+        for line in patch.split("\n"):
             if line.startswith("+") and not line.startswith("+++"):
                 added_lines.append(line[1:])
 
@@ -390,8 +396,13 @@ def analyze_pr_complexity(pr_data: "PRData") -> ComplexityReport:
             continue
 
         content = "\n".join(added_lines)
-        fc = analyze_file(filename, content=content)
-        if fc.total_lines > 0:
-            file_results.append(fc)
+        
+        # Try to analyze as Python
+        if filename.endswith(".py"):
+            try:
+                fc = analyze_file(filename, content)
+                files.append(fc)
+            except Exception:
+                continue
 
-    return ComplexityReport(files=file_results)
+    return ComplexityReport(files=files)
