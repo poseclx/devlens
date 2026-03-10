@@ -10,16 +10,11 @@ Run with: pytest test_language_server.py -v
 from __future__ import annotations
 
 import asyncio
-import json
-import logging
 import sys
 import types
-from pathlib import Path
 from unittest.mock import (
     AsyncMock,
     MagicMock,
-    PropertyMock,
-    call,
     patch,
 )
 
@@ -360,7 +355,7 @@ class TestFindingToDiagnostic:
 
     def test_basic_conversion(self):
         finding = _make_finding()
-        result = _finding_to_diagnostic(finding, "rules")
+        _finding_to_diagnostic(finding, "rules")
         # Diagnostic constructor should have been called
         mock_lsp.Diagnostic.assert_called()
 
@@ -988,7 +983,7 @@ class TestCodeLens:
         server._file_findings = {uri: {}}
         params = MagicMock()
         params.text_document.uri = uri
-        result = server._get_code_lens(params)
+        server._get_code_lens(params)
         # Command constructor should have been called
         mock_lsp.Command.assert_called()
 
@@ -1131,7 +1126,7 @@ class TestBuildServerCapabilities:
     """_build_server_capabilities returns proper ServerCapabilities."""
 
     def test_returns_capabilities(self):
-        result = _build_server_capabilities()
+        _build_server_capabilities()
         mock_lsp.ServerCapabilities.assert_called()
 
     def test_includes_text_document_sync(self):
@@ -1274,8 +1269,8 @@ class TestEdgeCases:
     def test_multiple_findings_same_line(self):
         f1 = _make_finding(line=5, rule_id="rule-a", message="Issue A")
         f2 = _make_finding(line=5, rule_id="rule-b", message="Issue B")
-        d1 = _finding_to_diagnostic(f1, "rules")
-        d2 = _finding_to_diagnostic(f2, "rules")
+        _finding_to_diagnostic(f1, "rules")
+        _finding_to_diagnostic(f2, "rules")
         # Both should succeed without error
         assert mock_lsp.Diagnostic.call_count >= 2
 
