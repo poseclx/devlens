@@ -27,7 +27,44 @@ from pathlib import Path
 from typing import Any, Optional
 
 try:
-    from lsprotocol import types as lsp
+    from lsprotocol.types import (
+        CodeAction,
+        CodeActionKind,
+        CodeActionOptions,
+        CodeActionParams,
+        CodeLens,
+        CodeLensOptions,
+        CodeLensParams,
+        Command,
+        Diagnostic,
+        DiagnosticSeverity,
+        DiagnosticTag,
+        DidChangeConfigurationParams,
+        DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams,
+        DidOpenTextDocumentParams,
+        DidSaveTextDocumentParams,
+        ExecuteCommandOptions,
+        ExecuteCommandParams,
+        Hover,
+        HoverOptions,
+        HoverParams,
+        InitializeParams,
+        InitializedParams,
+        MarkupContent,
+        MarkupKind,
+        MessageType,
+        Position,
+        Range,
+        Registration,
+        RegistrationParams,
+        SaveOptions,
+        ServerCapabilities,
+        TextDocumentSyncKind,
+        TextDocumentSyncOptions,
+        TextEdit,
+        WorkspaceEdit,
+    )
     from pygls.lsp.server import LanguageServer
     from pygls.workspace import TextDocument
 except ImportError:
@@ -62,22 +99,22 @@ logger = logging.getLogger("devlens.lsp")
 __all__ = ["DevLensLanguageServer", "start_server"]
 
 # ---------------------------------------------------------------------------
-# Severity mapping
+# Severity mapping  (plain integers for mock compatibility)
 # ---------------------------------------------------------------------------
 
-SEVERITY_MAP: dict[str, lsp.DiagnosticSeverity] = {
-    "critical": lsp.DiagnosticSeverity.Error,
-    "high": lsp.DiagnosticSeverity.Warning,
-    "medium": lsp.DiagnosticSeverity.Information,
-    "low": lsp.DiagnosticSeverity.Hint,
-    "info": lsp.DiagnosticSeverity.Hint,
+SEVERITY_MAP: dict[str, int] = {
+    "critical": DiagnosticSeverity.Error,
+    "high": DiagnosticSeverity.Warning,
+    "medium": DiagnosticSeverity.Information,
+    "low": DiagnosticSeverity.Hint,
+    "info": DiagnosticSeverity.Hint,
 }
 
 DIAGNOSTIC_SOURCE = "devlens"
 
-DIAGNOSTIC_TAGS: dict[str, list[lsp.DiagnosticTag]] = {
-    "deprecated": [lsp.DiagnosticTag.Deprecated],
-    "unused": [lsp.DiagnosticTag.Unnecessary],
+DIAGNOSTIC_TAGS: dict[str, list] = {
+    "deprecated": [DiagnosticTag.Deprecated],
+    "unused": [DiagnosticTag.Unnecessary],
 }
 
 
@@ -88,7 +125,7 @@ DIAGNOSTIC_TAGS: dict[str, list[lsp.DiagnosticTag]] = {
 def _finding_to_diagnostic(
     finding: dict[str, Any],
     category: str,
-) -> lsp.Diagnostic:
+) -> Diagnostic:
     """Convert a DevLens finding dict to an LSP Diagnostic."""
     line = max(0, finding.get("line", 1) - 1)
     col = max(0, finding.get("column", 0))
@@ -96,21 +133,21 @@ def _finding_to_diagnostic(
     end_col = finding.get("end_column", col + 1)
 
     severity_str = finding.get("severity", "medium").lower()
-    severity = SEVERITY_MAP.get(severity_str, lsp.DiagnosticSeverity.Information)
+    severity = SEVERITY_MAP.get(severity_str, DiagnosticSeverity.Information)
 
     message = finding.get("message", finding.get("description", "Issue detected"))
     rule_id = finding.get("rule_id", finding.get("id", f"{category}-issue"))
     code = f"devlens/{category}/{rule_id}"
 
-    tags: list[lsp.DiagnosticTag] = []
+    tags: list = []
     for tag_key, tag_values in DIAGNOSTIC_TAGS.items():
         if tag_key in message.lower() or tag_key in rule_id.lower():
             tags.extend(tag_values)
 
-    return lsp.Diagnostic(
-        range=lsp.Range(
-            start=lsp.Position(line=line, character=col),
-            end=lsp.Position(line=end_line, character=end_col),
+    return Diagnostic(
+        range=Range(
+            start=Position(line=line, character=col),
+            end=Position(line=end_line, character=end_col),
         ),
         severity=severity,
         code=code,
@@ -157,8 +194,8 @@ class DevLensLanguageServer(LanguageServer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
-        self._config: dict[str, Any] = {}
-        self._lsp_config: dict[str, Any] = {}
+        self._config: Optional[dict[str, Any]] = None
+        self._lsp_config: Optional[dict[str, Any]] = None
 
         self._rules_engine: Optional[RulesEngine] = None
         self._complexity_analyzer: Optional[ComplexityAnalyzer] = None
@@ -166,10 +203,10 @@ class DevLensLanguageServer(LanguageServer):
         self._score_calculator: Optional[ScoreCalculator] = None
         self._ai_reviewer: Optional[Any] = None
         self._auto_fixer: Optional[Any] = None
-        self._cache: Optional[AnalysisCache] = None
+        self._analysis_cache: Optional[AnalysisCache] = None
 
         self._file_scores: dict[str, float] = {}
-        self._file_findings: dict[str, list[dict]] = {}
+        self._file_findings: dict[str, Any] = {}
         self._debounce_tasks: dict[str, asyncio.Task] = {}
         self._analysis_lock = asyncio.Lock()
 
@@ -192,7 +229,7 @@ class DevLensLanguageServer(LanguageServer):
         self._complexity_analyzer = ComplexityAnalyzer(self._config)
         self._dep_auditor = DependencyAuditor(self._config)
         self._score_calculator = ScoreCalculator(self._config)
-        self._cache = AnalysisCache(self._config)
+        self._analysis_cache = AnalysisCache(self._config)
 
         if HAS_FIXER:
             try:
@@ -211,18 +248,18 @@ class DevLensLanguageServer(LanguageServer):
     def _register_handlers(self) -> None:
         """Register all LSP event handlers."""
 
-        @self.feature(lsp.INITIALIZE)
-        def on_initialize(params: lsp.InitializeParams) -> None:
+        @self.feature("initialize")
+        def on_initialize(params: InitializeParams) -> None:
             logger.info("DevLens LSP initializing for workspace: %s", params.root_uri)
             self._init_analyzers()
 
-        @self.feature(lsp.INITIALIZED)
-        def on_initialized(params: lsp.InitializedParams) -> None:
+        @self.feature("initialized")
+        def on_initialized(params: InitializedParams) -> None:
             logger.info("DevLens LSP initialized and ready")
             self.register_capability(
-                lsp.RegistrationParams(
+                RegistrationParams(
                     registrations=[
-                        lsp.Registration(
+                        Registration(
                             id="devlens-config",
                             method="workspace/didChangeConfiguration",
                         )
@@ -230,32 +267,35 @@ class DevLensLanguageServer(LanguageServer):
                 )
             )
 
-        @self.feature(lsp.TEXT_DOCUMENT_DID_OPEN)
-        async def on_did_open(params: lsp.DidOpenTextDocumentParams) -> None:
+        @self.feature("textDocument/didOpen")
+        async def on_did_open(params: DidOpenTextDocumentParams) -> None:
             uri = params.text_document.uri
             if self._should_analyze(uri):
-                if self._lsp_config.get("lint_on_open", True):
+                lsp_cfg = self._lsp_config or {}
+                if lsp_cfg.get("lint_on_open", True):
                     await self._run_analysis(uri)
 
-        @self.feature(lsp.TEXT_DOCUMENT_DID_SAVE)
-        async def on_did_save(params: lsp.DidSaveTextDocumentParams) -> None:
+        @self.feature("textDocument/didSave")
+        async def on_did_save(params: DidSaveTextDocumentParams) -> None:
             uri = params.text_document.uri
             if self._should_analyze(uri):
-                if self._lsp_config.get("lint_on_save", True):
+                lsp_cfg = self._lsp_config or {}
+                if lsp_cfg.get("lint_on_save", True):
                     await self._run_analysis(uri)
 
-        @self.feature(lsp.TEXT_DOCUMENT_DID_CHANGE)
-        async def on_did_change(params: lsp.DidChangeTextDocumentParams) -> None:
+        @self.feature("textDocument/didChange")
+        async def on_did_change(params: DidChangeTextDocumentParams) -> None:
             uri = params.text_document.uri
             if not self._should_analyze(uri):
                 return
-            if not self._lsp_config.get("lint_on_change", False):
+            lsp_cfg = self._lsp_config or {}
+            if not lsp_cfg.get("lint_on_change", False):
                 return
-            debounce_ms = self._lsp_config.get("debounce_ms", 1000)
-            await self._debounced_analysis(uri, debounce_ms)
+            debounce_ms = lsp_cfg.get("debounce_ms", 1000)
+            self._debounced_analysis(uri, debounce_ms)
 
-        @self.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)
-        def on_did_close(params: lsp.DidCloseTextDocumentParams) -> None:
+        @self.feature("textDocument/didClose")
+        def on_did_close(params: DidCloseTextDocumentParams) -> None:
             uri = params.text_document.uri
             self.publish_diagnostics(uri, [])
             self._file_scores.pop(uri, None)
@@ -264,43 +304,43 @@ class DevLensLanguageServer(LanguageServer):
             if task and not task.done():
                 task.cancel()
 
-        @self.feature(lsp.WORKSPACE_DID_CHANGE_CONFIGURATION)
-        def on_config_change(params: lsp.DidChangeConfigurationParams) -> None:
+        @self.feature("workspace/didChangeConfiguration")
+        def on_config_change(params: DidChangeConfigurationParams) -> None:
             settings = params.settings or {}
             devlens_settings = settings.get("devlens", {})
             if devlens_settings:
                 self._apply_settings(devlens_settings)
                 logger.info("Configuration updated from IDE")
 
-        @self.feature(lsp.TEXT_DOCUMENT_CODE_ACTION)
-        async def on_code_action(
-            params: lsp.CodeActionParams,
-        ) -> list[lsp.CodeAction]:
-            return await self._get_code_actions(params)
+        @self.feature("textDocument/codeAction")
+        def on_code_action(
+            params: CodeActionParams,
+        ) -> list[CodeAction]:
+            return self._get_code_actions(params)
 
-        @self.feature(lsp.TEXT_DOCUMENT_HOVER)
-        async def on_hover(
-            params: lsp.HoverParams,
-        ) -> Optional[lsp.Hover]:
-            return await self._get_hover(params)
+        @self.feature("textDocument/hover")
+        def on_hover(
+            params: HoverParams,
+        ) -> Optional[Hover]:
+            return self._get_hover(params)
 
-        @self.feature(lsp.TEXT_DOCUMENT_CODE_LENS)
-        async def on_code_lens(
-            params: lsp.CodeLensParams,
-        ) -> list[lsp.CodeLens]:
-            return await self._get_code_lens(params)
+        @self.feature("textDocument/codeLens")
+        def on_code_lens(
+            params: CodeLensParams,
+        ) -> list[CodeLens]:
+            return self._get_code_lens(params)
 
-        @self.feature(lsp.WORKSPACE_EXECUTE_COMMAND)
+        @self.feature("workspace/executeCommand")
         async def on_execute_command(
-            params: lsp.ExecuteCommandParams,
+            params: ExecuteCommandParams,
         ) -> Any:
             return await self._execute_command(params)
 
-        @self.feature(lsp.SHUTDOWN)
+        @self.feature("shutdown")
         def on_shutdown(params: Any) -> None:
             logger.info("DevLens LSP shutting down")
-            if self._cache:
-                self._cache.close()
+            if self._analysis_cache:
+                self._analysis_cache.close()
 
     # -------------------------------------------------------------------
     # Analysis pipeline
@@ -314,7 +354,7 @@ class DevLensLanguageServer(LanguageServer):
         supported = (".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".rb")
         return any(path.endswith(ext) for ext in supported)
 
-    async def _debounced_analysis(self, uri: str, delay_ms: int) -> None:
+    def _debounced_analysis(self, uri: str, delay_ms: int) -> None:
         """Run analysis with debouncing for on-change events."""
         existing = self._debounce_tasks.get(uri)
         if existing and not existing.done():
@@ -330,37 +370,46 @@ class DevLensLanguageServer(LanguageServer):
         """Run full DevLens analysis on a file and publish diagnostics."""
         async with self._analysis_lock:
             start_time = time.monotonic()
-            file_path = uri.replace("file://", "")
-            path = Path(file_path)
-
-            if not path.exists():
-                logger.warning("File not found: %s", file_path)
-                return
 
             self._init_analyzers()
 
             try:
-                if self._cache:
-                    cached = self._cache.get(file_path)
+                doc = self.workspace.get_text_document(uri)
+                file_path = doc.path
+                source_code = doc.source
+            except Exception:
+                file_path = uri.replace("file://", "")
+                path = Path(file_path)
+                if not path.exists():
+                    logger.warning("File not found: %s", file_path)
+                    return
+                source_code = path.read_text(encoding="utf-8", errors="replace")
+
+            try:
+                if self._analysis_cache:
+                    cached = self._analysis_cache.get(file_path)
                     if cached:
-                        logger.debug("Cache hit for %s", path.name)
+                        logger.debug("Cache hit for %s", Path(file_path).name)
                         self._publish_cached_results(uri, cached)
                         return
 
-                source_code = path.read_text(encoding="utf-8", errors="replace")
-                diagnostics: list[lsp.Diagnostic] = []
+                diagnostics: list = []
                 all_findings: list[dict] = []
 
                 # 1. Rules engine analysis
                 if self._rules_engine:
                     try:
                         rules_result = self._rules_engine.analyze(file_path, source_code)
-                        for finding in rules_result.get("findings", []):
+                        if isinstance(rules_result, list):
+                            findings_list = rules_result
+                        else:
+                            findings_list = rules_result.get("findings", []) if isinstance(rules_result, dict) else []
+                        for finding in findings_list:
                             diag = _finding_to_diagnostic(finding, "rules")
                             diagnostics.append(diag)
                             all_findings.append({**finding, "_category": "rules"})
                     except Exception as e:
-                        logger.error("Rules analysis failed for %s: %s", path.name, e)
+                        logger.error("Rules analysis failed for %s: %s", Path(file_path).name, e)
 
                 # 2. Complexity analysis
                 if self._complexity_analyzer:
@@ -368,12 +417,16 @@ class DevLensLanguageServer(LanguageServer):
                         complexity_result = self._complexity_analyzer.analyze(
                             file_path, source_code
                         )
-                        for finding in complexity_result.get("findings", []):
+                        if isinstance(complexity_result, list):
+                            findings_list = complexity_result
+                        else:
+                            findings_list = complexity_result.get("findings", []) if isinstance(complexity_result, dict) else []
+                        for finding in findings_list:
                             diag = _finding_to_diagnostic(finding, "complexity")
                             diagnostics.append(diag)
                             all_findings.append({**finding, "_category": "complexity"})
                     except Exception as e:
-                        logger.error("Complexity analysis failed for %s: %s", path.name, e)
+                        logger.error("Complexity analysis failed for %s: %s", Path(file_path).name, e)
 
                 # 3. Security analysis
                 if self._rules_engine:
@@ -381,33 +434,41 @@ class DevLensLanguageServer(LanguageServer):
                         security_result = self._rules_engine.analyze_security(
                             file_path, source_code
                         )
-                        for finding in security_result.get("findings", []):
+                        if isinstance(security_result, list):
+                            findings_list = security_result
+                        else:
+                            findings_list = security_result.get("findings", []) if isinstance(security_result, dict) else []
+                        for finding in findings_list:
                             diag = _finding_to_diagnostic(finding, "security")
                             diagnostics.append(diag)
                             all_findings.append({**finding, "_category": "security"})
                     except Exception as e:
-                        logger.error("Security analysis failed for %s: %s", path.name, e)
+                        logger.error("Security analysis failed for %s: %s", Path(file_path).name, e)
 
                 # 4. Dependency audit
                 dep_files = (
                     "requirements.txt", "Pipfile", "pyproject.toml",
                     "package.json", "Gemfile", "go.mod", "Cargo.toml",
                 )
-                if path.name in dep_files and self._dep_auditor:
+                if Path(file_path).name in dep_files and self._dep_auditor:
                     try:
                         dep_result = self._dep_auditor.audit(file_path)
-                        for finding in dep_result.get("findings", []):
+                        if isinstance(dep_result, list):
+                            findings_list = dep_result
+                        else:
+                            findings_list = dep_result.get("findings", []) if isinstance(dep_result, dict) else []
+                        for finding in findings_list:
                             diag = _finding_to_diagnostic(finding, "dependency")
                             diagnostics.append(diag)
                             all_findings.append({**finding, "_category": "dependency"})
                     except Exception as e:
-                        logger.error("Dependency audit failed for %s: %s", path.name, e)
+                        logger.error("Dependency audit failed for %s: %s", Path(file_path).name, e)
 
                 # 5. Calculate file score
                 score = 100.0
                 if self._score_calculator:
                     try:
-                        score = self._score_calculator.calculate_file_score(
+                        score = self._score_calculator.calculate(
                             all_findings, source_code
                         )
                     except Exception as e:
@@ -416,8 +477,8 @@ class DevLensLanguageServer(LanguageServer):
                 self._file_scores[uri] = score
                 self._file_findings[uri] = all_findings
 
-                if self._cache:
-                    self._cache.set(file_path, {
+                if self._analysis_cache:
+                    self._analysis_cache.set(file_path, {
                         "findings": all_findings,
                         "score": score,
                         "diagnostics_count": len(diagnostics),
@@ -429,7 +490,7 @@ class DevLensLanguageServer(LanguageServer):
                 grade = _score_to_grade(score)
                 logger.info(
                     "Analysis complete: %s — %d issues, score %.1f (%s), %.0fms",
-                    path.name,
+                    Path(file_path).name,
                     len(diagnostics),
                     score,
                     grade,
@@ -442,19 +503,36 @@ class DevLensLanguageServer(LanguageServer):
                 logger.error("Analysis failed for %s: %s", file_path, e)
                 self.show_message(
                     f"DevLens analysis failed: {e}",
-                    lsp.MessageType.Error,
+                    MessageType.Error,
                 )
 
     def _publish_cached_results(self, uri: str, cached: dict) -> None:
         """Publish diagnostics from cached analysis results."""
         diagnostics = []
-        for finding in cached.get("findings", []):
-            category = finding.get("_category", "rules")
-            diag = _finding_to_diagnostic(finding, category)
-            diagnostics.append(diag)
+        findings_data = cached.get("findings", {})
+
+        # Handle both list and dict formats for findings
+        if isinstance(findings_data, dict):
+            # Dict format: {category: [findings]}
+            all_findings_list = []
+            for category, cat_findings in findings_data.items():
+                if isinstance(cat_findings, list):
+                    for finding in cat_findings:
+                        diag = _finding_to_diagnostic(finding, category)
+                        diagnostics.append(diag)
+                        all_findings_list.append({**finding, "_category": category})
+            self._file_findings[uri] = findings_data
+        elif isinstance(findings_data, list):
+            # List format: [{..., _category: "rules"}, ...]
+            for finding in findings_data:
+                category = finding.get("_category", "rules")
+                diag = _finding_to_diagnostic(finding, category)
+                diagnostics.append(diag)
+            self._file_findings[uri] = findings_data
+        else:
+            self._file_findings[uri] = {}
 
         self._file_scores[uri] = cached.get("score", 100.0)
-        self._file_findings[uri] = cached.get("findings", [])
         self.publish_diagnostics(uri, diagnostics)
 
     def _notify_score(self, uri: str, score: float, grade: str, issue_count: int) -> None:
@@ -474,10 +552,16 @@ class DevLensLanguageServer(LanguageServer):
 
     def _apply_settings(self, settings: dict[str, Any]) -> None:
         """Apply IDE settings to LSP configuration."""
+        if self._lsp_config is None:
+            self._lsp_config = {}
+        if self._config is None:
+            self._config = {}
+
         mapping = {
             "lintOnSave": "lint_on_save",
             "lintOnChange": "lint_on_change",
             "lintOnOpen": "lint_on_open",
+            "lintOnType": "lint_on_type",
             "debounceMs": "debounce_ms",
             "logLevel": "log_level",
         }
@@ -489,32 +573,39 @@ class DevLensLanguageServer(LanguageServer):
         logging.getLogger("devlens").setLevel(getattr(logging, log_level, logging.INFO))
 
         ai_settings = settings.get("aiReview", {})
-        if isinstance(ai_settings, dict) and "enabled" in ai_settings:
-            if ai_settings["enabled"] and not self._ai_reviewer and HAS_AI:
-                try:
-                    self._ai_reviewer = AIReviewer(self._config)
-                except Exception as e:
-                    logger.warning("Failed to enable AI reviewer: %s", e)
-            elif not ai_settings["enabled"]:
-                self._ai_reviewer = None
+        if isinstance(ai_settings, dict):
+            if "enabled" in ai_settings:
+                # Propagate to _config
+                if "ai_review" not in self._config:
+                    self._config["ai_review"] = {}
+                self._config["ai_review"]["enabled"] = ai_settings["enabled"]
+
+                if ai_settings["enabled"] and not self._ai_reviewer and HAS_AI:
+                    try:
+                        self._ai_reviewer = AIReviewer(self._config)
+                    except Exception as e:
+                        logger.warning("Failed to enable AI reviewer: %s", e)
+                elif not ai_settings["enabled"]:
+                    self._ai_reviewer = None
 
     # -------------------------------------------------------------------
-    # Code Actions (quick fixes)
+    # Code Actions (quick fixes) — synchronous
     # -------------------------------------------------------------------
 
-    async def _get_code_actions(
+    def _get_code_actions(
         self,
-        params: lsp.CodeActionParams,
-    ) -> list[lsp.CodeAction]:
+        params: CodeActionParams,
+    ) -> list[CodeAction]:
         """Generate code actions (quick fixes) for diagnostics."""
-        actions: list[lsp.CodeAction] = []
+        actions: list = []
         uri = params.text_document.uri
 
         if not HAS_FIXER or not self._auto_fixer:
             return actions
 
         for diagnostic in params.context.diagnostics:
-            if diagnostic.source != DIAGNOSTIC_SOURCE:
+            source = diagnostic.source
+            if isinstance(source, str) and source != DIAGNOSTIC_SOURCE:
                 continue
 
             data = diagnostic.data or {}
@@ -526,18 +617,18 @@ class DevLensLanguageServer(LanguageServer):
                 if not fix:
                     continue
 
-                edit = lsp.TextEdit(
+                edit = TextEdit(
                     range=diagnostic.range,
                     new_text=fix.get("replacement", ""),
                 )
 
-                workspace_edit = lsp.WorkspaceEdit(
+                workspace_edit = WorkspaceEdit(
                     changes={uri: [edit]}
                 )
 
-                action = lsp.CodeAction(
+                action = CodeAction(
                     title=fix.get("title", f"Fix: {diagnostic.message[:50]}"),
-                    kind=lsp.CodeActionKind.QuickFix,
+                    kind=CodeActionKind.QuickFix,
                     diagnostics=[diagnostic],
                     edit=workspace_edit,
                     is_preferred=fix.get("preferred", False),
@@ -545,11 +636,11 @@ class DevLensLanguageServer(LanguageServer):
                 actions.append(action)
 
                 if fix.get("explanation"):
-                    explain_action = lsp.CodeAction(
+                    explain_action = CodeAction(
                         title=f"Explain: {diagnostic.code}",
-                        kind=lsp.CodeActionKind.Empty,
+                        kind=CodeActionKind.Empty,
                         diagnostics=[diagnostic],
-                        command=lsp.Command(
+                        command=Command(
                             title="Show Explanation",
                             command="devlens.showExplanation",
                             arguments=[{
@@ -566,22 +657,35 @@ class DevLensLanguageServer(LanguageServer):
         return actions
 
     # -------------------------------------------------------------------
-    # Hover (rule explanations)
+    # Hover (rule explanations) — synchronous
     # -------------------------------------------------------------------
 
-    async def _get_hover(
+    def _get_hover(
         self,
-        params: lsp.HoverParams,
-    ) -> Optional[lsp.Hover]:
+        params: HoverParams,
+    ) -> Optional[Hover]:
         """Show rule explanation and suggestions on hover over diagnostics."""
         uri = params.text_document.uri
         position = params.position
-        findings = self._file_findings.get(uri, [])
+        findings_data = self._file_findings.get(uri, {})
 
-        if not findings:
+        # Handle both dict and list formats
+        if isinstance(findings_data, dict):
+            # Dict format: {category: [findings]}
+            all_findings = []
+            for category, cat_findings in findings_data.items():
+                if isinstance(cat_findings, list):
+                    for f in cat_findings:
+                        all_findings.append({**f, "_category": category})
+        elif isinstance(findings_data, list):
+            all_findings = findings_data
+        else:
+            all_findings = []
+
+        if not all_findings:
             return None
 
-        for finding in findings:
+        for finding in all_findings:
             line = max(0, finding.get("line", 1) - 1)
             end_line = max(line, finding.get("end_line", line + 1) - 1)
 
@@ -612,45 +716,52 @@ class DevLensLanguageServer(LanguageServer):
                 if ref_url:
                     lines.extend(["", f"[Learn more]({ref_url})"])
 
-                return lsp.Hover(
-                    contents=lsp.MarkupContent(
-                        kind=lsp.MarkupKind.Markdown,
+                return Hover(
+                    contents=MarkupContent(
+                        kind=MarkupKind.Markdown,
                         value="\n".join(lines),
                     ),
-                    range=lsp.Range(
-                        start=lsp.Position(line=line, character=0),
-                        end=lsp.Position(line=end_line, character=0),
+                    range=Range(
+                        start=Position(line=line, character=0),
+                        end=Position(line=end_line, character=0),
                     ),
                 )
 
         return None
 
     # -------------------------------------------------------------------
-    # CodeLens (file quality score)
+    # CodeLens (file quality score) — synchronous
     # -------------------------------------------------------------------
 
-    async def _get_code_lens(
+    def _get_code_lens(
         self,
-        params: lsp.CodeLensParams,
-    ) -> list[lsp.CodeLens]:
+        params: CodeLensParams,
+    ) -> list[CodeLens]:
         """Show quality score as CodeLens at top of file."""
         uri = params.text_document.uri
         score = self._file_scores.get(uri)
-        lenses: list[lsp.CodeLens] = []
+        lenses: list = []
 
         if score is not None:
             grade = _score_to_grade(score)
             findings = self._file_findings.get(uri, [])
-            issue_count = len(findings)
+            if isinstance(findings, dict):
+                issue_count = sum(
+                    len(v) for v in findings.values() if isinstance(v, list)
+                )
+            elif isinstance(findings, list):
+                issue_count = len(findings)
+            else:
+                issue_count = 0
 
             title = f"DevLens: {grade} ({score:.0f}/100) — {issue_count} issue{'s' if issue_count != 1 else ''}"
 
-            lens = lsp.CodeLens(
-                range=lsp.Range(
-                    start=lsp.Position(line=0, character=0),
-                    end=lsp.Position(line=0, character=0),
+            lens = CodeLens(
+                range=Range(
+                    start=Position(line=0, character=0),
+                    end=Position(line=0, character=0),
                 ),
-                command=lsp.Command(
+                command=Command(
                     title=title,
                     command="devlens.showDashboard",
                     arguments=[uri],
@@ -666,7 +777,7 @@ class DevLensLanguageServer(LanguageServer):
 
     async def _execute_command(
         self,
-        params: lsp.ExecuteCommandParams,
+        params: ExecuteCommandParams,
     ) -> Any:
         """Handle custom DevLens commands."""
         command = params.command
@@ -684,16 +795,26 @@ class DevLensLanguageServer(LanguageServer):
             grade = _score_to_grade(score)
             findings = self._file_findings.get(uri, []) if uri else []
 
+            # Handle both dict and list findings
             by_category: dict[str, list] = {}
-            for f in findings:
-                cat = f.get("_category", "other")
-                by_category.setdefault(cat, []).append(f)
+            if isinstance(findings, dict):
+                by_category = findings
+            elif isinstance(findings, list):
+                for f in findings:
+                    cat = f.get("_category", "other")
+                    by_category.setdefault(cat, []).append(f)
+
+            total_count = sum(
+                len(v) for v in by_category.values() if isinstance(v, list)
+            )
 
             summary_lines = [
                 f"# DevLens Dashboard — {grade} ({score:.0f}/100)",
                 "",
             ]
             for cat, cat_findings in sorted(by_category.items()):
+                if not isinstance(cat_findings, list):
+                    continue
                 summary_lines.append(f"## {cat.title()} ({len(cat_findings)} issues)")
                 for f in cat_findings[:5]:
                     msg = f.get("message", "")[:80]
@@ -704,25 +825,30 @@ class DevLensLanguageServer(LanguageServer):
                 summary_lines.append("")
 
             self.show_message(
-                f"DevLens: {grade} ({score:.0f}/100) - {len(findings)} issues found",
-                lsp.MessageType.Info,
+                f"DevLens: {grade} ({score:.0f}/100) - {total_count} issues found",
+                MessageType.Info,
             )
 
             return {
                 "score": score,
                 "grade": grade,
-                "issueCount": len(findings),
+                "issueCount": total_count,
                 "summary": "\n".join(summary_lines),
             }
 
         elif command == "devlens.showExplanation":
             if args:
                 data = args[0] if isinstance(args[0], dict) else {}
+                if not isinstance(data, dict):
+                    # Handle case where args are positional strings
+                    rule = args[0] if len(args) > 0 else "Unknown"
+                    explanation = args[1] if len(args) > 1 else "No explanation available."
+                    data = {"rule": rule, "explanation": explanation}
                 rule = data.get("rule", "Unknown")
                 explanation = data.get("explanation", "No explanation available.")
                 self.show_message(
                     f"{rule}: {explanation}",
-                    lsp.MessageType.Info,
+                    MessageType.Info,
                 )
                 return {"rule": rule, "explanation": explanation}
 
@@ -731,22 +857,22 @@ class DevLensLanguageServer(LanguageServer):
                 self.show_message(
                     "AI Review is available. Configure provider and API key "
                     "in .devlens.toml or IDE settings.",
-                    lsp.MessageType.Info,
+                    MessageType.Info,
                 )
             else:
                 self.show_message(
                     "AI Review requires extra dependencies. "
                     "Install with: pip install devlens[ai]",
-                    lsp.MessageType.Warning,
+                    MessageType.Warning,
                 )
             return {"ai_available": HAS_AI}
 
         elif command == "devlens.clearCache":
-            if self._cache:
-                self._cache.clear()
+            if self._analysis_cache:
+                self._analysis_cache.clear()
                 self.show_message(
                     "DevLens cache cleared.",
-                    lsp.MessageType.Info,
+                    MessageType.Info,
                 )
             return {"status": "ok"}
 
@@ -758,7 +884,7 @@ class DevLensLanguageServer(LanguageServer):
                     analyzed += 1
             self.show_message(
                 f"DevLens: Analyzed {analyzed} files in workspace.",
-                lsp.MessageType.Info,
+                MessageType.Info,
             )
             return {"status": "ok", "filesAnalyzed": analyzed}
 
@@ -769,23 +895,23 @@ class DevLensLanguageServer(LanguageServer):
 # Server initialization capabilities
 # ---------------------------------------------------------------------------
 
-def _build_server_capabilities() -> lsp.ServerCapabilities:
+def _build_server_capabilities() -> ServerCapabilities:
     """Build server capabilities for the InitializeResult."""
-    return lsp.ServerCapabilities(
-        text_document_sync=lsp.TextDocumentSyncOptions(
+    return ServerCapabilities(
+        text_document_sync=TextDocumentSyncOptions(
             open_close=True,
-            change=lsp.TextDocumentSyncKind.Incremental,
-            save=lsp.SaveOptions(include_text=False),
+            change=TextDocumentSyncKind.Incremental,
+            save=SaveOptions(include_text=False),
         ),
-        code_action_provider=lsp.CodeActionOptions(
+        code_action_provider=CodeActionOptions(
             code_action_kinds=[
-                lsp.CodeActionKind.QuickFix,
+                CodeActionKind.QuickFix,
             ],
             resolve_provider=False,
         ),
-        hover_provider=lsp.HoverOptions(),
-        code_lens_provider=lsp.CodeLensOptions(resolve_provider=False),
-        execute_command_provider=lsp.ExecuteCommandOptions(
+        hover_provider=HoverOptions(),
+        code_lens_provider=CodeLensOptions(resolve_provider=False),
+        execute_command_provider=ExecuteCommandOptions(
             commands=[
                 "devlens.analyzeFile",
                 "devlens.showDashboard",
@@ -812,7 +938,7 @@ def create_server() -> DevLensLanguageServer:
 
 
 def start_server(
-    mode: str = "stdio",
+    mode: str = "io",
     host: str = "127.0.0.1",
     port: int = 2087,
     log_level: str = "info",
@@ -820,7 +946,7 @@ def start_server(
     """Start the DevLens Language Server.
 
     Args:
-        mode: Transport mode — 'stdio' or 'tcp'.
+        mode: Transport mode — 'io', 'stdio', or 'tcp'.
         host: TCP host (only used in tcp mode).
         port: TCP port (only used in tcp mode).
         log_level: Logging level (debug, info, warning, error).
@@ -856,9 +982,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode",
-        choices=["stdio", "tcp"],
-        default="stdio",
-        help="Transport mode (default: stdio)",
+        choices=["io", "stdio", "tcp"],
+        default="io",
+        help="Transport mode (default: io)",
     )
     parser.add_argument(
         "--host",
