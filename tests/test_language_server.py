@@ -157,6 +157,7 @@ mock_pygls_workspace.TextDocument = MagicMock(name="TextDocument")
 # --- devlens sub-module mocks -------------------------------------------
 
 mock_devlens = types.ModuleType("devlens")
+mock_devlens.__path__ = []  # Make it act as a package so sub-imports work
 mock_cache = MagicMock(name="devlens.cache")
 mock_complexity = MagicMock(name="devlens.complexity")
 mock_config = MagicMock(name="devlens.config")
@@ -165,6 +166,16 @@ mock_rules = MagicMock(name="devlens.rules")
 mock_scoreboard = MagicMock(name="devlens.scoreboard")
 mock_ai_review = MagicMock(name="devlens.ai_review")
 mock_fixer = MagicMock(name="devlens.fixer")
+
+# Save original sys.modules entries so we can restore them after tests
+_MOCKED_MODULES = [
+    "lsprotocol", "lsprotocol.types",
+    "pygls", "pygls.lsp", "pygls.lsp.server", "pygls.workspace",
+    "devlens", "devlens.cache", "devlens.complexity", "devlens.config",
+    "devlens.depaudit", "devlens.rules", "devlens.scoreboard",
+    "devlens.ai_review", "devlens.fixer", "devlens.language_server",
+]
+_saved_modules = {k: sys.modules[k] for k in _MOCKED_MODULES if k in sys.modules}
 
 # Patch sys.modules so `from devlens.xxx import ...` works
 sys.modules["lsprotocol"] = MagicMock()
@@ -1359,3 +1370,16 @@ class TestScoreToGradeParametrized:
     )
     def test_grade(self, score, grade):
         assert _score_to_grade(score) == grade
+
+
+# =========================================================================
+# Module-level teardown -- restore sys.modules to avoid polluting other tests
+# =========================================================================
+
+def teardown_module(module):
+    """Restore sys.modules entries that were patched at module level."""
+    for key in _MOCKED_MODULES:
+        if key in _saved_modules:
+            sys.modules[key] = _saved_modules[key]
+        else:
+            sys.modules.pop(key, None)
