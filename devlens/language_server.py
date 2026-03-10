@@ -17,11 +17,8 @@ Requires: pygls>=2.0, lsprotocol>=2025.0
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -66,7 +63,7 @@ try:
         WorkspaceEdit,
     )
     from pygls.lsp.server import LanguageServer
-    from pygls.workspace import TextDocument
+    from pygls.workspace import TextDocument  # noqa: F401 (used by type checkers)
 except ImportError:
     print(
         "DevLens LSP requires pygls and lsprotocol.\n"
@@ -75,12 +72,12 @@ except ImportError:
     )
     sys.exit(1)
 
-from devlens.cache import AnalysisCache
-from devlens.complexity import ComplexityAnalyzer
+from devlens.cache import AnalysisCache  # type: ignore[attr-defined]
+from devlens.complexity import ComplexityAnalyzer  # type: ignore[attr-defined]
 from devlens.config import load_config, get_lsp_config
 from devlens.depaudit import DependencyAuditor
-from devlens.rules import RulesEngine
-from devlens.scoreboard import ScoreCalculator
+from devlens.rules import RulesEngine  # type: ignore[attr-defined]
+from devlens.scoreboard import ScoreCalculator  # type: ignore[attr-defined]
 
 try:
     from devlens.ai_review import AIReviewer
@@ -89,7 +86,7 @@ except ImportError:
     HAS_AI = False
 
 try:
-    from devlens.fixer import AutoFixer
+    from devlens.fixer import AutoFixer  # type: ignore[attr-defined]
     HAS_FIXER = True
 except ImportError:
     HAS_FIXER = False
@@ -112,7 +109,7 @@ SEVERITY_MAP: dict[str, int] = {
 
 DIAGNOSTIC_SOURCE = "devlens"
 
-DIAGNOSTIC_TAGS: dict[str, list] = {
+DIAGNOSTIC_TAGS: dict[str, list[Any]] = {
     "deprecated": [DiagnosticTag.Deprecated],
     "unused": [DiagnosticTag.Unnecessary],
 }
@@ -139,7 +136,7 @@ def _finding_to_diagnostic(
     rule_id = finding.get("rule_id", finding.get("id", f"{category}-issue"))
     code = f"devlens/{category}/{rule_id}"
 
-    tags: list = []
+    tags: list[Any] = []
     for tag_key, tag_values in DIAGNOSTIC_TAGS.items():
         if tag_key in message.lower() or tag_key in rule_id.lower():
             tags.extend(tag_values)
@@ -180,7 +177,7 @@ def _score_to_grade(score: float) -> str:
 # DevLens Language Server
 # ---------------------------------------------------------------------------
 
-class DevLensLanguageServer(LanguageServer):
+class DevLensLanguageServer(LanguageServer):  # type: ignore[misc]
     """Language Server that provides DevLens code analysis features.
 
     Features:
@@ -207,7 +204,7 @@ class DevLensLanguageServer(LanguageServer):
 
         self._file_scores: dict[str, float] = {}
         self._file_findings: dict[str, Any] = {}
-        self._debounce_tasks: dict[str, asyncio.Task] = {}
+        self._debounce_tasks: dict[str, asyncio.Task[Any]] = {}
         self._analysis_lock = asyncio.Lock()
 
         self._register_handlers()
@@ -248,12 +245,12 @@ class DevLensLanguageServer(LanguageServer):
     def _register_handlers(self) -> None:
         """Register all LSP event handlers."""
 
-        @self.feature("initialize")
+        @self.feature("initialize")  # type: ignore
         def on_initialize(params: InitializeParams) -> None:
             logger.info("DevLens LSP initializing for workspace: %s", params.root_uri)
             self._init_analyzers()
 
-        @self.feature("initialized")
+        @self.feature("initialized")  # type: ignore
         def on_initialized(params: InitializedParams) -> None:
             logger.info("DevLens LSP initialized and ready")
             self.register_capability(
@@ -267,7 +264,7 @@ class DevLensLanguageServer(LanguageServer):
                 )
             )
 
-        @self.feature("textDocument/didOpen")
+        @self.feature("textDocument/didOpen")  # type: ignore
         async def on_did_open(params: DidOpenTextDocumentParams) -> None:
             uri = params.text_document.uri
             if self._should_analyze(uri):
@@ -275,7 +272,7 @@ class DevLensLanguageServer(LanguageServer):
                 if lsp_cfg.get("lint_on_open", True):
                     await self._run_analysis(uri)
 
-        @self.feature("textDocument/didSave")
+        @self.feature("textDocument/didSave")  # type: ignore
         async def on_did_save(params: DidSaveTextDocumentParams) -> None:
             uri = params.text_document.uri
             if self._should_analyze(uri):
@@ -283,7 +280,7 @@ class DevLensLanguageServer(LanguageServer):
                 if lsp_cfg.get("lint_on_save", True):
                     await self._run_analysis(uri)
 
-        @self.feature("textDocument/didChange")
+        @self.feature("textDocument/didChange")  # type: ignore
         async def on_did_change(params: DidChangeTextDocumentParams) -> None:
             uri = params.text_document.uri
             if not self._should_analyze(uri):
@@ -294,7 +291,7 @@ class DevLensLanguageServer(LanguageServer):
             debounce_ms = lsp_cfg.get("debounce_ms", 1000)
             self._debounced_analysis(uri, debounce_ms)
 
-        @self.feature("textDocument/didClose")
+        @self.feature("textDocument/didClose")  # type: ignore
         def on_did_close(params: DidCloseTextDocumentParams) -> None:
             uri = params.text_document.uri
             self.publish_diagnostics(uri, [])
@@ -304,7 +301,7 @@ class DevLensLanguageServer(LanguageServer):
             if task and not task.done():
                 task.cancel()
 
-        @self.feature("workspace/didChangeConfiguration")
+        @self.feature("workspace/didChangeConfiguration")  # type: ignore
         def on_config_change(params: DidChangeConfigurationParams) -> None:
             settings = params.settings or {}
             devlens_settings = settings.get("devlens", {})
@@ -312,31 +309,31 @@ class DevLensLanguageServer(LanguageServer):
                 self._apply_settings(devlens_settings)
                 logger.info("Configuration updated from IDE")
 
-        @self.feature("textDocument/codeAction")
+        @self.feature("textDocument/codeAction")  # type: ignore
         def on_code_action(
             params: CodeActionParams,
         ) -> list[CodeAction]:
             return self._get_code_actions(params)
 
-        @self.feature("textDocument/hover")
+        @self.feature("textDocument/hover")  # type: ignore
         def on_hover(
             params: HoverParams,
         ) -> Optional[Hover]:
             return self._get_hover(params)
 
-        @self.feature("textDocument/codeLens")
+        @self.feature("textDocument/codeLens")  # type: ignore
         def on_code_lens(
             params: CodeLensParams,
         ) -> list[CodeLens]:
             return self._get_code_lens(params)
 
-        @self.feature("workspace/executeCommand")
+        @self.feature("workspace/executeCommand")  # type: ignore
         async def on_execute_command(
             params: ExecuteCommandParams,
         ) -> Any:
             return await self._execute_command(params)
 
-        @self.feature("shutdown")
+        @self.feature("shutdown")  # type: ignore
         def on_shutdown(params: Any) -> None:
             logger.info("DevLens LSP shutting down")
             if self._analysis_cache:
@@ -393,8 +390,8 @@ class DevLensLanguageServer(LanguageServer):
                         self._publish_cached_results(uri, cached)
                         return
 
-                diagnostics: list = []
-                all_findings: list[dict] = []
+                diagnostics: list[Any] = []
+                all_findings: list[dict[str, Any]] = []
 
                 # 1. Rules engine analysis
                 if self._rules_engine:
@@ -506,7 +503,7 @@ class DevLensLanguageServer(LanguageServer):
                     MessageType.Error,
                 )
 
-    def _publish_cached_results(self, uri: str, cached: dict) -> None:
+    def _publish_cached_results(self, uri: str, cached: dict[str, Any]) -> None:
         """Publish diagnostics from cached analysis results."""
         diagnostics = []
         findings_data = cached.get("findings", {})
@@ -597,7 +594,7 @@ class DevLensLanguageServer(LanguageServer):
         params: CodeActionParams,
     ) -> list[CodeAction]:
         """Generate code actions (quick fixes) for diagnostics."""
-        actions: list = []
+        actions: list[Any] = []
         uri = params.text_document.uri
 
         if not HAS_FIXER or not self._auto_fixer:
@@ -740,7 +737,7 @@ class DevLensLanguageServer(LanguageServer):
         """Show quality score as CodeLens at top of file."""
         uri = params.text_document.uri
         score = self._file_scores.get(uri)
-        lenses: list = []
+        lenses: list[Any] = []
 
         if score is not None:
             grade = _score_to_grade(score)
@@ -796,7 +793,7 @@ class DevLensLanguageServer(LanguageServer):
             findings = self._file_findings.get(uri, []) if uri else []
 
             # Handle both dict and list findings
-            by_category: dict[str, list] = {}
+            by_category: dict[str, list[Any]] = {}
             if isinstance(findings, dict):
                 by_category = findings
             elif isinstance(findings, list):
