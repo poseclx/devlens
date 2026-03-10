@@ -194,7 +194,8 @@ def _query_osv(dep: Dependency) -> list[dict[str, Any]]:
         resp = httpx.post(_OSV_API, json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("vulns", [])
+        result: list[dict[str, Any]] = data.get("vulns", [])
+        return result
     except Exception:
         return []
 
@@ -224,14 +225,14 @@ def _fixed_version_from_osv(vuln_data: dict[str, Any]) -> str:
         for r in affected.get("ranges", []):
             for event in r.get("events", []):
                 if "fixed" in event:
-                    return event["fixed"]
+                    return str(event["fixed"])
     return ""
 
 
 def _url_from_osv(vuln_data: dict[str, Any]) -> str:
     """Extract the first advisory URL from an OSV entry."""
     for ref in vuln_data.get("references", []):
-        url = ref.get("url", "")
+        url: str = ref.get("url", "")
         if url:
             return url
     return ""
@@ -241,7 +242,7 @@ def _package_name_from_osv(vuln_data: dict[str, Any]) -> str:
     """Extract the package name from the first affected entry."""
     for affected in vuln_data.get("affected", []):
         pkg = affected.get("package", {})
-        name = pkg.get("name", "")
+        name: str = pkg.get("name", "")
         if name:
             return name
     return ""
