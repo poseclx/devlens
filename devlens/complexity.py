@@ -112,9 +112,9 @@ class ComplexityReport:
             return "A"
         if avg <= 10 and high <= 2:
             return "B"
-        if avg <= 15 and high <= 5:
+        if avg <= 20 and high <= 5:
             return "C"
-        if avg <= 20:
+        if avg <= 25:
             return "D"
         return "F"
 
