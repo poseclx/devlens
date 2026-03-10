@@ -1,7 +1,10 @@
 """Tests for devlens.fixer module."""
+
+from __future__ import annotations
+
 import pytest
 import json
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import patch, Mock
 
 from devlens.fixer import (
     FixSuggestion,
