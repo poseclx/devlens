@@ -1,6 +1,8 @@
 # tests/test_complexity.py
 """Tests for devlens.complexity — AST-based complexity analysis."""
-import pytest
+
+from __future__ import annotations
+
 import textwrap
 from devlens.complexity import (
     FunctionMetrics,
@@ -16,7 +18,6 @@ from devlens.complexity import (
 
 class TestFunctionMetrics:
     """FunctionMetrics dataclass and risk property."""
-
     def _make(self, **kw):
         defaults = dict(
             name="fn", file="test.py", line=1, end_line=5,
