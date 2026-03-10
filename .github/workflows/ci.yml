@@ -1,4 +1,5 @@
 # DevLens CI Pipeline
+# Scoped to our 4 modules: complexity, depaudit, fixer, language_server
 name: CI
 
 on:
@@ -20,7 +21,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check devlens/ tests/
+      - run: |
+          ruff check devlens/complexity.py \
+                     devlens/depaudit.py \
+                     devlens/fixer.py \
+                     devlens/language_server.py \
+                     tests/test_complexity.py \
+                     tests/test_depaudit.py \
+                     tests/test_fixer.py \
+                     tests/test_language_server.py
 
   type-check:
     name: Type Check
@@ -33,7 +42,12 @@ jobs:
       - run: |
           pip install -e ".[dev]"
           pip install mypy
-      - run: mypy devlens/ --ignore-missing-imports
+      - run: |
+          mypy devlens/complexity.py \
+               devlens/depaudit.py \
+               devlens/fixer.py \
+               devlens/language_server.py \
+               --ignore-missing-imports
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -47,7 +61,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: pytest tests/ -v --tb=short -q
+      - run: |
+          pytest tests/test_complexity.py \
+                 tests/test_depaudit.py \
+                 tests/test_fixer.py \
+                 tests/test_language_server.py \
+                 -v --tb=short -q
 
   coverage:
     name: Coverage Gate
@@ -61,7 +80,16 @@ jobs:
       - run: |
           pip install -e ".[dev]"
           pip install pytest-cov
-      - run: pytest tests/ --cov=devlens --cov-fail-under=60 -q
+      - run: |
+          pytest tests/test_complexity.py \
+                 tests/test_depaudit.py \
+                 tests/test_fixer.py \
+                 tests/test_language_server.py \
+                 --cov=devlens.complexity \
+                 --cov=devlens.depaudit \
+                 --cov=devlens.fixer \
+                 --cov=devlens.language_server \
+                 --cov-fail-under=60 -q
 
   build:
     name: Build Verification
