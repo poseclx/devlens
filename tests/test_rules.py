@@ -48,7 +48,7 @@ class TestRule:
     def test_matches_file_include_pattern(self):
         rule = Rule(
             id="R1", title="Test", type=RuleType.PATTERN,
-            pattern="test", include_patterns=["*.py"],
+            pattern="test", include_patterns=["\\.py$"],
         )
         assert rule.matches_file("app.py") is True
         assert rule.matches_file("style.css") is False
@@ -56,7 +56,7 @@ class TestRule:
     def test_matches_file_exclude_pattern(self):
         rule = Rule(
             id="R1", title="Test", type=RuleType.PATTERN,
-            pattern="test", exclude_patterns=["__init__.py"],
+            pattern="test", exclude_patterns=["__init__\\.py"],
         )
         assert rule.matches_file("main.py") is True
         assert rule.matches_file("__init__.py") is False
@@ -65,8 +65,8 @@ class TestRule:
         rule = Rule(
             id="R1", title="Test", type=RuleType.PATTERN,
             pattern="test",
-            include_patterns=["*.py"],
-            exclude_patterns=["test_*.py"],
+            include_patterns=["\\.py$"],
+            exclude_patterns=["test_.*\\.py$"],
         )
         assert rule.matches_file("app.py") is True
         assert rule.matches_file("test_app.py") is False
@@ -124,7 +124,7 @@ class TestRuleEngine:
         assert engine.list_rules() == []
 
     def test_init_with_rules(self, sample_rule_definitions):
-        engine = RuleEngine.from_config({"rules": sample_rule_definitions})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": sample_rule_definitions, "builtin_ast": []}})
         rules = engine.list_rules()
         assert len(rules) == 3
 
@@ -135,7 +135,7 @@ class TestRuleEngine:
         assert len(engine.list_rules()) == 3
 
     def test_evaluate_file_pattern_match(self, sample_rule_definitions):
-        engine = RuleEngine.from_config({"rules": sample_rule_definitions})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": sample_rule_definitions}})
         code = 'result = eval("2+2")\nprint(result)\n'
         violations = engine.evaluate_file("test.py", code)
         eval_violations = [v for v in violations if v.rule_id == "NO_EVAL"]
@@ -143,28 +143,28 @@ class TestRuleEngine:
         assert eval_violations[0].severity == Severity.CRITICAL
 
     def test_evaluate_file_no_match(self, sample_rule_definitions):
-        engine = RuleEngine.from_config({"rules": sample_rule_definitions})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": sample_rule_definitions}})
         code = "x = 1 + 2\nprint(x)\n"
         violations = engine.evaluate_file("test.py", code)
         pattern_violations = [v for v in violations if v.rule_id in ("NO_EVAL", "NO_STAR_IMPORT")]
         assert len(pattern_violations) == 0
 
     def test_evaluate_file_star_import(self, sample_rule_definitions):
-        engine = RuleEngine.from_config({"rules": sample_rule_definitions})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": sample_rule_definitions}})
         code = "from os import *\n"
         violations = engine.evaluate_file("test.py", code)
         star_violations = [v for v in violations if v.rule_id == "NO_STAR_IMPORT"]
         assert len(star_violations) >= 1
 
     def test_evaluate_file_excludes_init(self, sample_rule_definitions):
-        engine = RuleEngine.from_config({"rules": sample_rule_definitions})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": sample_rule_definitions}})
         code = "from os import *\n"
         violations = engine.evaluate_file("__init__.py", code)
         star_violations = [v for v in violations if v.rule_id == "NO_STAR_IMPORT"]
         assert len(star_violations) == 0
 
     def test_validate_valid_rules(self, sample_rule_definitions):
-        engine = RuleEngine.from_config({"rules": sample_rule_definitions})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": sample_rule_definitions}})
         errors = engine.validate()
         assert len(errors) == 0
 
@@ -173,7 +173,7 @@ class TestRuleEngine:
             "id": "BAD", "title": "Bad regex", "type": "pattern",
             "severity": "high", "pattern": "[invalid(",
         }]
-        engine = RuleEngine.from_config({"rules": bad_rules})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": bad_rules, "builtin_ast": []}})
         errors = engine.validate()
         assert len(errors) >= 1
 
@@ -183,6 +183,6 @@ class TestRuleEngine:
             "severity": "high", "pattern": "print",
             "enabled": False,
         }]
-        engine = RuleEngine.from_config({"rules": rules})
+        engine = RuleEngine.from_config({"rules": {"custom_rules": rules, "builtin_ast": []}})
         violations = engine.evaluate_file("test.py", "print('hello')\n")
         assert all(v.rule_id != "OFF" for v in violations)
