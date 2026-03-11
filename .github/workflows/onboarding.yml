@@ -83,4 +83,3 @@ jobs:
             git commit -m "docs: update ONBOARDING.md via DevLens"
             git push
           fi
-Commit mesajı: fix: correct YAML indentation in onboarding workflow
