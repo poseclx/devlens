@@ -282,8 +282,8 @@ def sample_rule_definitions():
             "severity": "low",
             "pattern": r"from\s+\S+\s+import\s+\*",
             "description": "Wildcard imports pollute namespace",
-            "include_patterns": ["*.py"],
-            "exclude_patterns": ["__init__.py"],
+            "include": ["\\.py$"],
+            "exclude": ["__init__\\.py"],
         },
     ]
 
