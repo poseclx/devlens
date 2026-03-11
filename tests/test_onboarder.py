@@ -1,4 +1,3 @@
-# tests/test_onboarder.py
 """Tests for devlens.onboarder — repository onboarding analyzer."""
 import pytest
 import json
@@ -17,36 +16,28 @@ from devlens.onboarder import (
 )
 
 
-# ── RepoSnapshot ─────────────────────────────────────────────
+# -- RepoSnapshot --
 
 class TestRepoSnapshot:
     """RepoSnapshot holds scanned repo structure."""
 
     def test_creation(self, tmp_path):
         snap = RepoSnapshot(
-            root=str(tmp_path),
-            files=["main.py", "utils.py"],
-            tree="main.py\nutils.py",
-            languages={"python": 2},
-            total_files=2,
-            total_lines=100,
+            root=tmp_path,
+            structure="main.py\nutils.py",
+            languages=["Python"],
+            file_contents={"main.py": "print('hi')", "utils.py": "x = 1"},
         )
-        assert snap.total_files == 2
-        assert snap.languages["python"] == 2
+        assert len(snap.file_contents) == 2
+        assert "Python" in snap.languages
 
-    def test_empty_repo(self):
-        snap = RepoSnapshot(
-            root="/tmp/empty",
-            files=[],
-            tree="(empty)",
-            languages={},
-            total_files=0,
-            total_lines=0,
-        )
-        assert snap.total_files == 0
+    def test_empty_repo(self, tmp_path):
+        snap = RepoSnapshot(root=tmp_path)
+        assert len(snap.file_contents) == 0
+        assert snap.languages == []
 
 
-# ── _build_tree ──────────────────────────────────────────────
+# -- _build_tree --
 
 class TestBuildTree:
     """_build_tree creates a text tree representation."""
@@ -65,27 +56,32 @@ class TestBuildTree:
         assert isinstance(tree, str)
 
 
-# ── _detect_languages ────────────────────────────────────────
+# -- _detect_languages --
 
 class TestDetectLanguages:
-    """_detect_languages counts files per language."""
+    """_detect_languages scans a directory for language files."""
 
-    def test_python_files(self):
-        files = ["main.py", "utils.py", "test.py"]
-        langs = _detect_languages(files)
-        assert langs.get("python", langs.get("Python", 0)) >= 3 or "py" in str(langs).lower()
+    def test_python_files(self, tmp_path):
+        (tmp_path / "main.py").write_text("x = 1")
+        (tmp_path / "utils.py").write_text("y = 2")
+        (tmp_path / "test.py").write_text("z = 3")
+        langs = _detect_languages(tmp_path)
+        assert "Python" in langs
 
-    def test_mixed_languages(self):
-        files = ["app.py", "index.js", "style.css", "main.go"]
-        langs = _detect_languages(files)
+    def test_mixed_languages(self, tmp_path):
+        (tmp_path / "app.py").write_text("x = 1")
+        (tmp_path / "index.js").write_text("var x = 1;")
+        (tmp_path / "style.css").write_text("body {}")
+        (tmp_path / "main.go").write_text("package main")
+        langs = _detect_languages(tmp_path)
         assert len(langs) >= 2
 
-    def test_empty_files(self):
-        langs = _detect_languages([])
-        assert len(langs) == 0 or sum(langs.values()) == 0
+    def test_empty_dir(self, tmp_path):
+        langs = _detect_languages(tmp_path)
+        assert len(langs) == 0
 
 
-# ── scan_repo ────────────────────────────────────────────────
+# -- scan_repo --
 
 class TestScanRepo:
     """scan_repo walks directory and creates RepoSnapshot."""
@@ -98,8 +94,7 @@ class TestScanRepo:
         (sub / "app.py").write_text("class App:\n    pass\n")
         snap = scan_repo(str(tmp_path))
         assert isinstance(snap, RepoSnapshot)
-        assert snap.total_files >= 2
-        assert len(snap.files) >= 2
+        assert len(snap.file_contents) >= 2
 
     def test_ignores_git_dir(self, tmp_path):
         (tmp_path / "main.py").write_text("x = 1\n")
@@ -107,7 +102,7 @@ class TestScanRepo:
         git_dir.mkdir()
         (git_dir / "config").write_text("git stuff")
         snap = scan_repo(str(tmp_path))
-        assert not any(".git" in f for f in snap.files)
+        assert not any(".git" in f for f in snap.file_contents)
 
     def test_ignores_node_modules(self, tmp_path):
         (tmp_path / "index.js").write_text("const x = 1;\n")
@@ -115,15 +110,16 @@ class TestScanRepo:
         nm.mkdir()
         (nm / "pkg.js").write_text("module")
         snap = scan_repo(str(tmp_path))
-        assert not any("node_modules" in f for f in snap.files)
+        assert not any("node_modules" in f for f in snap.file_contents)
 
-    def test_counts_lines(self, tmp_path):
+    def test_reads_content(self, tmp_path):
         (tmp_path / "main.py").write_text("line1\nline2\nline3\n")
         snap = scan_repo(str(tmp_path))
-        assert snap.total_lines >= 3
+        total_lines = sum(c.count("\n") for c in snap.file_contents.values())
+        assert total_lines >= 3
 
 
-# ── _static_onboard ──────────────────────────────────────────
+# -- _static_onboard --
 
 class TestStaticOnboard:
     """_static_onboard creates guide without AI."""
@@ -134,8 +130,7 @@ class TestStaticOnboard:
         snap = scan_repo(str(tmp_path))
         result = _static_onboard(snap)
         assert isinstance(result, OnboardingResult)
-        assert result.overview  # not empty
-        assert len(result.key_files) >= 0
+        assert result.overview
 
     def test_detects_entry_points(self, tmp_path):
         (tmp_path / "main.py").write_text("if __name__ == '__main__':\n    pass\n")
@@ -144,16 +139,17 @@ class TestStaticOnboard:
         assert isinstance(result, OnboardingResult)
 
 
-# ── analyze_repo (main entry) ────────────────────────────────
+# -- analyze_repo (main entry) --
 
 class TestAnalyzeRepo:
     """analyze_repo is the main entry point."""
 
     def test_static_mode(self, tmp_path):
         (tmp_path / "app.py").write_text("x = 1\n")
-        result = analyze_repo(str(tmp_path))
+        snap = scan_repo(str(tmp_path))
+        result = analyze_repo(snap)
         assert isinstance(result, OnboardingResult)
-        assert result.overview  # not empty
+        assert result.overview
 
     @patch("devlens.onboarder._call_llm")
     def test_ai_mode(self, mock_llm, tmp_path):
@@ -162,13 +158,15 @@ class TestAnalyzeRepo:
             "architecture": "Simple script",
             "key_files": [{"file": "app.py", "role": "Main app"}],
             "entry_points": ["app.py"],
+            "tech_stack": ["Python"],
             "getting_started": ["Run python app.py"],
-            "conventions": ["PEP 8"],
+            "where_to_start": "Start with app.py",
         })
         (tmp_path / "app.py").write_text("print('hello')\n")
-        result = analyze_repo(str(tmp_path), use_ai=True, model="gpt-4o", api_key="test")
+        snap = scan_repo(str(tmp_path))
+        result = analyze_repo(snap, use_ai=True, model="gpt-4o", api_key="test")
         assert result.overview == "A Python project"
 
     def test_nonexistent_path(self):
         with pytest.raises((FileNotFoundError, SystemExit, OSError)):
-            analyze_repo("/nonexistent/path/xyz123")
+            scan_repo("/nonexistent/path/xyz123")
