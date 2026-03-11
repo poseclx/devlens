@@ -1,4 +1,3 @@
-# tests/test_ai_review.py
 """Tests for devlens.ai_review — AI-powered code review engine."""
 import pytest
 import json
@@ -21,7 +20,7 @@ from devlens.ai_review import (
 )
 
 
-# ── AIProvider enum ──────────────────────────────────────────
+# ── AIProvider enum ──────────────────────────────────────────────────
 
 class TestAIProvider:
     """AIProvider enum values."""
@@ -34,7 +33,7 @@ class TestAIProvider:
         assert isinstance(AIProvider.OPENAI, str)
 
 
-# ── ReviewMode enum ──────────────────────────────────────────
+# ── ReviewMode enum ──────────────────────────────────────────────────
 
 class TestReviewMode:
     """ReviewMode enum values."""
@@ -51,7 +50,7 @@ class TestReviewMode:
         assert len(ReviewMode) == 6
 
 
-# ── AIReviewConfig ───────────────────────────────────────────
+# ── AIReviewConfig ───────────────────────────────────────────────────
 
 class TestAIReviewConfig:
     """AIReviewConfig defaults and from_dict."""
@@ -103,7 +102,7 @@ class TestAIReviewConfig:
         assert c.api_key == "sk-devlens"
 
 
-# ── TokenCounter ─────────────────────────────────────────────
+# ── TokenCounter ─────────────────────────────────────────────────────
 
 class TestTokenCounter:
     """TokenCounter tracks token usage."""
@@ -149,7 +148,7 @@ class TestTokenCounter:
         assert tc.stats["total_requests"] == 0
 
 
-# ── RateLimiter ──────────────────────────────────────────────
+# ── RateLimiter ──────────────────────────────────────────────────────
 
 class TestRateLimiter:
     """RateLimiter sliding window mechanics."""
@@ -170,7 +169,7 @@ class TestRateLimiter:
         # No assertion needed -- just verify no error
 
 
-# ── ResponseCache ────────────────────────────────────────────
+# ── ResponseCache ────────────────────────────────────────────────────
 
 class TestResponseCache:
     """ResponseCache file-based caching."""
@@ -212,7 +211,7 @@ class TestResponseCache:
         assert pruned >= 1
 
 
-# ── AIReviewer ───────────────────────────────────────────────
+# ── AIReviewer ───────────────────────────────────────────────────────
 
 class TestAIReviewer:
     """AIReviewer core engine."""
@@ -268,12 +267,12 @@ class TestAIReviewer:
     @pytest.mark.asyncio
     async def test_review_file_calls_llm(self):
         r = self._make_reviewer()
-        mock_response = json.dumps({
+        mock_response = {
             "issues": [
                 {"title": "Bug", "severity": "high", "line": 5,
                  "description": "Issue found", "suggestion": "Fix it"}
             ]
-        })
+        }
         with patch.object(r, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
             result = await r.review_file(Path("test.py"), code="x = 1\ny = 2\n")
             assert len(result) >= 1
@@ -282,10 +281,10 @@ class TestAIReviewer:
     @pytest.mark.asyncio
     async def test_generate_commit_message(self):
         r = self._make_reviewer()
-        mock_response = json.dumps({
+        mock_response = {
             "subject": "feat: add user auth",
             "body": "Implemented login and signup endpoints.",
-        })
+        }
         with patch.object(r, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
             result = await r.generate_commit_message("diff content here")
             assert "subject" in result
@@ -294,12 +293,12 @@ class TestAIReviewer:
     @pytest.mark.asyncio
     async def test_explain_code(self):
         r = self._make_reviewer()
-        mock_response = json.dumps({
+        mock_response = {
             "summary": "A simple function",
             "components": ["variable x"],
             "patterns": [],
             "notes": "Nothing special",
-        })
+        }
         with patch.object(r, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
             result = await r.explain_code("x = 1", language="python")
             assert result["summary"] == "A simple function"
@@ -307,10 +306,10 @@ class TestAIReviewer:
     @pytest.mark.asyncio
     async def test_detect_bugs(self):
         r = self._make_reviewer()
-        mock_response = json.dumps({
+        mock_response = {
             "bugs": [{"title": "Off by one", "severity": "medium",
                        "line": 3, "description": "Loop bound", "suggestion": "Use <="}]
-        })
+        }
         with patch.object(r, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
             result = await r.detect_bugs(Path("app.py"), code="for i in range(n):\n    pass\n")
             assert len(result) >= 1
@@ -318,10 +317,10 @@ class TestAIReviewer:
     @pytest.mark.asyncio
     async def test_suggest_refactoring(self):
         r = self._make_reviewer()
-        mock_response = json.dumps({
+        mock_response = {
             "suggestions": [{"title": "Extract method", "description": "Too long",
                               "before": "old", "after": "new"}]
-        })
+        }
         with patch.object(r, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
             result = await r.suggest_refactoring(Path("app.py"), code="x = 1\n" * 50)
             assert len(result) >= 1
@@ -331,10 +330,10 @@ class TestAIReviewer:
         r = self._make_reviewer()
         issues = [{"title": "Bug", "severity": "high", "line": 5,
                     "description": "Issue", "suggestion": "Fix"}]
-        mock_response = json.dumps({
+        mock_response = {
             "fixes": [{"issue_title": "Bug", "fix": "corrected code",
                         "explanation": "Fixed the bug"}]
-        })
+        }
         with patch.object(r, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
             result = await r.suggest_fixes(Path("app.py"), issues, code="buggy\n")
             assert len(result) >= 1
@@ -342,7 +341,7 @@ class TestAIReviewer:
     @pytest.mark.asyncio
     async def test_review_files_batch(self):
         r = self._make_reviewer()
-        mock_response = json.dumps({"issues": []})
+        mock_response = {"issues": []}
         with patch.object(r, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
             paths = [Path("a.py"), Path("b.py")]
             # Create temp files for reading
@@ -361,7 +360,7 @@ class TestAIReviewer:
         await r.close()  # should not raise
 
 
-# ── run_ai_review_sync ───────────────────────────────────────
+# ── run_ai_review_sync ───────────────────────────────────────────────
 
 class TestRunAIReviewSync:
     """run_ai_review_sync synchronous CLI wrapper."""
@@ -371,13 +370,14 @@ class TestRunAIReviewSync:
         mock_instance = MagicMock()
         mock_instance.available = True
         mock_instance.review_file = AsyncMock(return_value=[])
+        mock_instance.review_files = AsyncMock(return_value={})
         mock_instance.token_stats = {"total_tokens": 0}
         mock_instance.close = AsyncMock()
         MockReviewer.return_value = mock_instance
 
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        result = run_ai_review_sync([f], {"api_key": "test"}, mode=ReviewMode.REVIEW)
+        result = run_ai_review_sync([f], {"ai_review": {"api_key": "test"}}, mode=ReviewMode.REVIEW)
         assert "results" in result or "result" in result
         assert result["mode"] == "review"
 
@@ -394,11 +394,11 @@ class TestRunAIReviewSync:
 
         f = tmp_path / "diff.txt"
         f.write_text("- old\n+ new\n")
-        result = run_ai_review_sync([f], {"api_key": "test"}, mode=ReviewMode.COMMIT_MSG)
+        result = run_ai_review_sync([f], {"ai_review": {"api_key": "test"}}, mode=ReviewMode.COMMIT_MSG)
         assert result["mode"] == "commit_msg"
 
 
-# ── configure_api_key ────────────────────────────────────────
+# ── configure_api_key ────────────────────────────────────────────────
 
 class TestConfigureAPIKey:
     """configure_api_key saves keys to config file."""
