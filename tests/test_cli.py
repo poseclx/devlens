@@ -44,7 +44,7 @@ def _patch_imports(monkeypatch):
 
 @pytest.fixture
 def runner():
-    return CliRunner(mix_stderr=False)
+    return CliRunner()
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +512,7 @@ class TestDoctorCommand:
 
     def test_doctor_no_config(self, runner, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "test_cli._CONFIG_PATH",
+            "tests.test_cli._CONFIG_PATH",
             tmp_path / "nonexistent" / "config.json",
         )
         result = runner.invoke(main, ["doctor"])
@@ -522,7 +522,7 @@ class TestDoctorCommand:
     def test_doctor_with_config(self, runner, tmp_path, monkeypatch):
         cfg_path = tmp_path / "config.json"
         cfg_path.write_text(json.dumps({"provider": "openai", "model": "gpt-4o"}))
-        monkeypatch.setattr("test_cli._CONFIG_PATH", cfg_path)
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", cfg_path)
         result = runner.invoke(main, ["doctor"])
         assert result.exit_code == 0
         assert "openai" in result.output
@@ -871,18 +871,18 @@ class TestLoadSaveSetup:
     """Tests for _load_setup / _save_setup with real tmp files."""
 
     def test_load_missing_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("test_cli._CONFIG_PATH", tmp_path / "nope.json")
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", tmp_path / "nope.json")
         assert _load_setup() == {}
 
     def test_load_corrupt_json(self, tmp_path, monkeypatch):
         cfg = tmp_path / "config.json"
         cfg.write_text("NOT-JSON")
-        monkeypatch.setattr("test_cli._CONFIG_PATH", cfg)
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", cfg)
         assert _load_setup() == {}
 
     def test_save_and_load_roundtrip(self, tmp_path, monkeypatch):
         cfg = tmp_path / ".devlens" / "config.json"
-        monkeypatch.setattr("test_cli._CONFIG_PATH", cfg)
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", cfg)
         data = {"provider": "openai", "model": "gpt-4o", "api_key": "sk-test"}
         _save_setup(data)
         assert cfg.exists()
@@ -891,7 +891,7 @@ class TestLoadSaveSetup:
 
     def test_save_creates_parent_dirs(self, tmp_path, monkeypatch):
         cfg = tmp_path / "deep" / "nested" / "config.json"
-        monkeypatch.setattr("test_cli._CONFIG_PATH", cfg)
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", cfg)
         _save_setup({"test": True})
         assert cfg.exists()
 
@@ -957,7 +957,7 @@ class TestResolveModel:
     def test_ollama_from_saved_config_no_key(self, tmp_path, monkeypatch):
         cfg = tmp_path / "config.json"
         cfg.write_text(json.dumps({"provider": "ollama", "model": "ollama/llama3.1"}))
-        monkeypatch.setattr("test_cli._CONFIG_PATH", cfg)
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", cfg)
         model, provider = _resolve_model(None, {})
         assert provider == "ollama"
 
@@ -968,20 +968,20 @@ class TestResolveModel:
             "model": "gpt-4o",
             "api_key": "sk-testkey123",
         }))
-        monkeypatch.setattr("test_cli._CONFIG_PATH", cfg)
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", cfg)
         model, provider = _resolve_model(None, {})
         assert model == "gpt-4o"
         assert provider == "openai"
 
     def test_no_config_exits(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("test_cli._CONFIG_PATH", tmp_path / "nope.json")
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", tmp_path / "nope.json")
         with pytest.raises(SystemExit):
             _resolve_model(None, {})
 
     def test_missing_api_key_exits(self, tmp_path, monkeypatch):
         cfg = tmp_path / "config.json"
         cfg.write_text(json.dumps({"provider": "openai", "model": "gpt-4o"}))
-        monkeypatch.setattr("test_cli._CONFIG_PATH", cfg)
+        monkeypatch.setattr("tests.test_cli._CONFIG_PATH", cfg)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         with pytest.raises(SystemExit):
             _resolve_model(None, {})
