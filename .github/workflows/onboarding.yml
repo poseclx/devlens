@@ -41,20 +41,23 @@ jobs:
       - name: Install DevLens
         run: pip install .
 
-      - name: Run Onboarding Analysis
+     - name: Run Onboarding Analysis
         env:
           OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
         run: |
           AI_FLAG=""
-          if [ -n "$OPENAI_API_KEY" ] || [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$GEMINI_API_KEY" ]; then
-            AI_FLAG="--ai"
+          if [ -n "$OPENAI_API_KEY" ]; then
+            AI_FLAG="--ai --model gpt-4o"
+          elif [ -n "$ANTHROPIC_API_KEY" ]; then
+            AI_FLAG="--ai --model claude-sonnet-4-20250514"
+          elif [ -n "$GEMINI_API_KEY" ]; then
+            AI_FLAG="--ai --model gemini-pro"
           fi
 
-          devlens onboard . --format markdown --output ONBOARDING.md $AI_FLAG
-          devlens onboard . --format html --output devlens-onboarding.html $AI_FLAG
-
+          devlens onboard . --format markdown --output ONBOARDING.md $AI_FLAG || true
+          devlens onboard . --format html --output devlens-onboarding.html $AI_FLAG || true
       - name: Upload HTML Onboarding Report
         uses: actions/upload-artifact@v4
         with:
