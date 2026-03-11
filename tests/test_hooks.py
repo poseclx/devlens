@@ -110,6 +110,13 @@ def _setup_run_hook_mocks():
 
     devlens.ignore doesn't exist, and we want to isolate the others.
     """
+    # Save originals so we can restore them in finally blocks
+    _saved = {
+        "devlens.ignore": sys.modules.get("devlens.ignore"),
+        "devlens.config": sys.modules.get("devlens.config"),
+        "devlens.security": sys.modules.get("devlens.security"),
+    }
+
     # -- devlens.ignore mock --
     mock_ignore_mod = MagicMock()
     ignore_filter = MagicMock()
@@ -132,7 +139,16 @@ def _setup_run_hook_mocks():
     sys.modules["devlens.config"] = mock_config_mod
     sys.modules["devlens.security"] = mock_security_mod
 
-    return mock_security_mod
+    return mock_security_mod, _saved
+
+
+def _restore_modules(_saved):
+    """Restore original sys.modules entries after run_hook mocks."""
+    for key, orig in _saved.items():
+        if orig is None:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = orig
 
 
 class TestRunHook:
@@ -142,18 +158,18 @@ class TestRunHook:
         mock_staged.return_value = []
         # run_hook() imports devlens.ignore at the top of the function body
         # (before checking staged files), so we must inject the fake module
-        _setup_run_hook_mocks()
+        _mock_security, _saved = _setup_run_hook_mocks()
         try:
             result = run_hook()
             assert result == 0
         finally:
-            sys.modules.pop("devlens.ignore", None)
+            _restore_modules(_saved)
 
     @patch("devlens.hooks.get_staged_files")
     def test_with_issues(self, mock_staged, tmp_path):
         """Staged files but no findings -> return 0."""
         mock_staged.return_value = ["insecure.py"]
-        mock_security = _setup_run_hook_mocks()
+        mock_security, _saved = _setup_run_hook_mocks()
         # scan_path returns empty list -> no findings -> return 0
         mock_security.scan_path.return_value = []
         try:
@@ -162,4 +178,4 @@ class TestRunHook:
             assert result == 0
         finally:
             # Clean up injected modules
-            sys.modules.pop("devlens.ignore", None)
+            _restore_modules(_saved)
