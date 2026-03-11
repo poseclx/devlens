@@ -96,10 +96,13 @@ class IgnoreFilter:
         # Convert ** to regex-friendly pattern
         regex_pattern = pattern
         regex_pattern = regex_pattern.replace(".", r"\.")
+        regex_pattern = regex_pattern.replace("?", "§QUESTION§")
+        regex_pattern = regex_pattern.replace("**/", "§DOUBLESTAR_SLASH§")
         regex_pattern = regex_pattern.replace("**", "§DOUBLESTAR§")
         regex_pattern = regex_pattern.replace("*", "[^/]*")
+        regex_pattern = regex_pattern.replace("§DOUBLESTAR_SLASH§", "(.*/)?")
         regex_pattern = regex_pattern.replace("§DOUBLESTAR§", ".*")
-        regex_pattern = regex_pattern.replace("?", "[^/]")
+        regex_pattern = regex_pattern.replace("§QUESTION§", "[^/]")
 
         # Match from start or as a suffix
         if re.search(regex_pattern, filepath):
