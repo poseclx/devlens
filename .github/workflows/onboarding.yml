@@ -39,7 +39,7 @@ jobs:
           restore-keys: ${{ runner.os }}-pip-
 
       - name: Install DevLens
-        run: pip install devlens
+        run: pip install .
 
       - name: Run Onboarding Analysis
         env:
@@ -62,48 +62,20 @@ jobs:
           path: devlens-onboarding.html
           retention-days: 90
 
-      - name: Open PR with ONBOARDING.md
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            if (!fs.existsSync('ONBOARDING.md')) return;
+      - name: Commit ONBOARDING.md
+        run: |
+          if [ ! -f ONBOARDING.md ]; then
+            echo "ONBOARDING.md not generated, skipping commit."
+            exit 0
+          fi
 
-            const { execSync } = require('child_process');
-            const branch = 'devlens/onboarding-update';
+          git config user.name "DevLens Bot"
+          git config user.email "devlens@users.noreply.github.com"
+          git add ONBOARDING.md
 
-            execSync(`git config user.name "DevLens Bot"`);
-            execSync(`git config user.email "devlens@users.noreply.github.com"`);
-            execSync(`git checkout -B ${branch}`);
-            execSync(`git add ONBOARDING.md`);
-            execSync(`git commit -m "docs: update ONBOARDING.md via DevLens" || echo "Nothing to commit"`);
-            execSync(`git push origin ${branch} --force`);
-
-            const header = '<!-- devlens-onboarding -->';
-            const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
-            const body = [
-              header,
-              '## DevLens Onboarding Guide Updated',
-              '',
-              'DevLens has analyzed the repository structure and generated an updated `ONBOARDING.md`.',
-              '',
-              `Full HTML report available as artifact: [View Run](${artifactUrl})`,
-            ].join('\n');
-
-            const { data: pulls } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head: `${context.repo.owner}:${branch}`,
-              state: 'open',
-            });
-
-            if (pulls.length === 0) {
-              await github.rest.pulls.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: 'docs: update ONBOARDING.md via DevLens',
-                head: branch,
-                base: 'main',
-                body,
-              });
-            }
+          if git diff --cached --quiet; then
+            echo "No changes to ONBOARDING.md, skipping commit."
+          else
+            git commit -m "docs: update ONBOARDING.md via DevLens"
+            git push
+          fi
