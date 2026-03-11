@@ -41,7 +41,7 @@ class TestPluginType:
 
 class TestPluginMeta:
     def test_frozen(self):
-        meta = PluginMeta(
+        meta_obj = PluginMeta(
             name="test-plugin",
             version="1.0.0",
             plugin_type=PluginType.CHECKER,
@@ -49,19 +49,19 @@ class TestPluginMeta:
             author="tester",
         )
         with pytest.raises(AttributeError):
-            meta.name = "changed"
+            meta_obj.name = "changed"
 
     def test_fields(self):
-        meta = PluginMeta(
+        meta_obj = PluginMeta(
             name="my-plugin",
             version="2.1.0",
             plugin_type=PluginType.FIXER,
             description="Fixes things",
             author="dev",
         )
-        assert meta.name == "my-plugin"
-        assert meta.version == "2.1.0"
-        assert meta.plugin_type == PluginType.FIXER
+        assert meta_obj.name == "my-plugin"
+        assert meta_obj.version == "2.1.0"
+        assert meta_obj.plugin_type == PluginType.FIXER
 
 
 # ---------------------------------------------------------------------------
@@ -70,13 +70,15 @@ class TestPluginMeta:
 
 class TestPluginBase:
     def test_cannot_instantiate(self):
-        with pytest.raises(TypeError):
+        """PluginBase requires meta attribute and abstract methods."""
+        with pytest.raises((TypeError, AttributeError)):
             PluginBase()
 
     def test_subclass_must_implement(self):
+        """Subclass without meta raises error on init."""
         class IncompletePlugin(PluginBase):
             pass
-        with pytest.raises(TypeError):
+        with pytest.raises((TypeError, AttributeError)):
             IncompletePlugin()
 
 
@@ -85,61 +87,54 @@ class TestPluginBase:
 # ---------------------------------------------------------------------------
 
 class TestPluginRegistry:
-    def test_empty_registry(self):
-        registry = PluginRegistry()
-        assert registry.list_plugins() == []
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self):
+        """Clear singleton registry before each test."""
+        reg = PluginRegistry()
+        reg.clear()
+        yield
+        reg.clear()
 
-    def test_register_and_get(self):
-        registry = PluginRegistry()
-        meta = PluginMeta(
-            name="test-checker",
+    def _make_plugin(self, name, plugin_type=PluginType.CHECKER):
+        """Helper to create a valid plugin class."""
+        meta_obj = PluginMeta(
+            name=name,
             version="1.0.0",
-            plugin_type=PluginType.CHECKER,
+            plugin_type=plugin_type,
             description="Test",
             author="dev",
         )
+        # Create class dynamically to avoid scoping issues
+        cls = type(f"Plugin_{name.replace('-','_')}", (PluginBase,), {
+            "meta": meta_obj,
+            "on_start": lambda self, ctx: None,
+            "on_file": lambda self, ctx, path: None,
+            "on_complete": lambda self, ctx: None,
+        })
+        return cls
 
-        class TestChecker(PluginBase):
-            plugin_meta = meta
-            def initialize(self, context):
-                pass
-            def execute(self, context):
-                return []
-            def cleanup(self):
-                pass
+    def test_empty_registry(self):
+        registry = PluginRegistry()
+        assert registry.names() == []
 
-        registry.register(TestChecker)
-        result = registry.get_plugin("test-checker")
+    def test_register_and_get(self):
+        registry = PluginRegistry()
+        plugin_cls = self._make_plugin("test-checker")
+        registry.register(plugin_cls)
+        result = registry.get("test-checker")
         assert result is not None
 
     def test_list_plugins(self):
         registry = PluginRegistry()
-        meta = PluginMeta(
-            name="listed-plugin",
-            version="1.0.0",
-            plugin_type=PluginType.REPORTER,
-            description="Listed",
-            author="dev",
-        )
-
-        class ListedPlugin(PluginBase):
-            plugin_meta = meta
-            def initialize(self, context):
-                pass
-            def execute(self, context):
-                return []
-            def cleanup(self):
-                pass
-
-        registry.register(ListedPlugin)
-        plugins = registry.list_plugins()
-        assert len(plugins) >= 1
-        names = [p["name"] if isinstance(p, dict) else p.name for p in plugins]
+        plugin_cls = self._make_plugin("listed-plugin", PluginType.REPORTER)
+        registry.register(plugin_cls)
+        names = registry.names()
+        assert len(names) >= 1
         assert "listed-plugin" in names
 
     def test_get_nonexistent(self):
         registry = PluginRegistry()
-        result = registry.get_plugin("does-not-exist")
+        result = registry.get("does-not-exist")
         assert result is None
 
 
@@ -149,7 +144,7 @@ class TestPluginRegistry:
 
 class TestCheckCompatibility:
     def test_compatible(self):
-        meta = PluginMeta(
+        meta_obj = PluginMeta(
             name="compat",
             version="1.0.0",
             plugin_type=PluginType.CHECKER,
@@ -157,10 +152,10 @@ class TestCheckCompatibility:
             author="dev",
             min_devlens_version="0.5.0",
         )
-        assert check_compatibility(meta, "0.8.0") is True
+        assert check_compatibility(meta_obj, "0.8.0") is True
 
     def test_incompatible(self):
-        meta = PluginMeta(
+        meta_obj = PluginMeta(
             name="incompat",
             version="1.0.0",
             plugin_type=PluginType.CHECKER,
@@ -168,7 +163,7 @@ class TestCheckCompatibility:
             author="dev",
             min_devlens_version="99.0.0",
         )
-        assert check_compatibility(meta, "0.8.0") is False
+        assert check_compatibility(meta_obj, "0.8.0") is False
 
 
 # ---------------------------------------------------------------------------
