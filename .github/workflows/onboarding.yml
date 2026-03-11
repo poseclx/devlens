@@ -41,7 +41,7 @@ jobs:
       - name: Install DevLens
         run: pip install .
 
-     - name: Run Onboarding Analysis
+      - name: Run Onboarding Analysis
         env:
           OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -58,6 +58,7 @@ jobs:
 
           devlens onboard . --format markdown --output ONBOARDING.md $AI_FLAG || true
           devlens onboard . --format html --output devlens-onboarding.html $AI_FLAG || true
+
       - name: Upload HTML Onboarding Report
         uses: actions/upload-artifact@v4
         with:
@@ -82,3 +83,4 @@ jobs:
             git commit -m "docs: update ONBOARDING.md via DevLens"
             git push
           fi
+Commit mesajı: fix: correct YAML indentation in onboarding workflow
